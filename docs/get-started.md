@@ -4,13 +4,15 @@ This input is under development. Use the installation method shipped by the curr
 
 ## Prerequisites
 
-- Logstash 8.19 or a tested Logstash 9.x release, with persistent queues enabled for durable ingestion.
+- Logstash 8.19 or a tested Logstash 9.x release. For at-least-once crash recovery, configure a persistent queue with `queue.checkpoint.writes: 1` and keep both the queue and plugin H2 state directory on durable storage.
 - A single-tenant Entra application and its service principal in the target tenant.
 - Admin consent for the application permissions corresponding to enabled collectors.
 - A certificate registered on the app (recommended) or a client secret stored in the Logstash keystore.
 - A writable, durable local directory for this tenant's checkpoint database.
 
 Create the app and prepare configuration with the [provisioning helper](provisioning.md). Keep the private key and credentials accessible only to the Logstash service account. Do not put secrets directly in pipeline files.
+
+The persistent queue and durable H2 state are both required for at-least-once recovery. The exact `logstash.yml` settings and the loss boundary with default queue checkpointing are described in [operations and recovery](operations.md).
 
 ## Minimal pipeline
 

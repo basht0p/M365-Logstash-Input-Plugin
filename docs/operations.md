@@ -2,7 +2,7 @@
 
 Each input maintains its own local H2 state database beneath `state_path`. Assign a unique directory to every tenant input. Keep it on durable local storage, include it in the service's backup/recovery plan, and preserve it when upgrading. Do not run two live Logstash instances against the same state directory.
 
-Collection is designed for at-least-once delivery when used with Logstash persistent queues and durable plugin state. Enable persistent queues and set `queue.checkpoint.writes: 1` when the strongest crash durability is required. A practical `logstash.yml` fragment is:
+At-least-once recovery after an abnormal shutdown requires **both** a durable, intact H2 state directory and a Logstash persistent queue configured with `queue.checkpoint.writes: 1`. These are mandatory prerequisites for the delivery guarantee:
 
 ```yaml
 queue.type: persisted
@@ -10,7 +10,7 @@ queue.checkpoint.writes: 1
 path.data: /var/lib/logstash
 ```
 
-The plugin can only treat successful insertion into the Logstash queue as delivery. It does not receive downstream output acknowledgements. A crash between queue insertion and checkpoint persistence can replay events, so downstream duplicates are possible. This setup does not provide exactly-once delivery.
+With the default or a larger persistent-queue checkpoint interval, Logstash may accept an event into memory while the plugin advances its H2 cursor; a crash before the queue checkpoint reaches disk can then lose that event because collection resumes after it. Keeping the H2 state directory on durable storage is also required: losing or rolling it back independently can invalidate collection progress. Under both prerequisites, crash recovery can replay events, so downstream duplicates remain possible. The plugin observes successful queue insertion only; it receives no downstream output acknowledgement and cannot guarantee exactly-once indexing.
 
 Activity discovery advances in windows of up to 24 hours and depends on the Activity API's short content availability window; the current collector raises a visible availability-gap error when discovery falls more than seven days behind. Graph timestamp collectors use windows of up to one hour, with the configured overlap to account for late arrivals. Configure `initial_lookback` and `overlap` for the expected restart and ingestion delay pattern, while staying within each source's retention limits. `replay_from` is a one-time timestamp replay point for time-window Graph collectors and Activity. Activity and timestamp-based Graph collectors also perform bounded reconciliation using `replay_horizon` and `reconciliation_interval`; for configurations that enable Activity, the lookback and replay horizon cannot exceed seven days. These settings do not extend Microsoft source retention.
 
