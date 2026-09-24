@@ -1,0 +1,45 @@
+{
+  "mappings": {
+    "dynamic": true,
+    "properties": {
+      "@timestamp": { "type": "date" },
+      "event": {
+        "properties": {
+          "id": { "type": "keyword" },
+          "dataset": { "type": "keyword" },
+          "kind": { "type": "keyword" },
+          "action": { "type": "keyword" },
+          "provider": { "type": "keyword" },
+          "created": { "type": "date" },
+          "outcome": { "type": "keyword" },
+          "original": { "type": "keyword", "ignore_above": 8192 }
+        }
+      },
+      "organization": {
+        "properties": {
+          "id": { "type": "keyword" },
+          "name": { "type": "keyword" }
+        }
+      },
+      "user": { "properties": { "name": { "type": "keyword" } } },
+      "source": { "properties": { "ip": { "type": "ip" } } },
+      "device": {
+        "properties": {
+          "id": { "type": "keyword" },
+          "name": { "type": "keyword" }
+        }
+      },
+      "accounting": {
+        "properties": {
+          "log": { "properties": { "type": { "type": "keyword" } } }
+        }
+      },
+      "microsoft": {
+        "properties": {
+          "tenant_id": { "type": "keyword" },
+          "raw": { "type": "object", "enabled": false }
+        }
+      }
+    }
+  }
+}

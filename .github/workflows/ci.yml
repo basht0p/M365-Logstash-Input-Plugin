@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  powershell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Pester 5
+        shell: pwsh
+        run: Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force -SkipPublisherCheck
+      - name: Test tenant helper
+        shell: pwsh
+        run: Invoke-Pester -Path scripts/tests/Initialize-M365LogstashTenant.Tests.ps1 -CI
+
+  logstash:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        logstash: ['8.19.22', '9.5.4']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Vendor pinned Java dependencies
+        run: mvn -B dependency:copy-dependencies
+      - name: Build offline gem
+        run: gem build logstash-input-microsoft365.gemspec
+      - name: Test plugin under Logstash
+        shell: bash
+        run: |
+          set -euo pipefail
+          container="m365-ci-${{ matrix.logstash }}-${{ github.run_id }}"
+          offline_container="${container}-offline"
+          trap 'docker rm -f "$container" "$offline_container" >/dev/null 2>&1 || true' EXIT
+          docker run -d --name "$container" --user root --entrypoint sleep -v "$PWD:/work" -w /work "docker.elastic.co/logstash/logstash:${{ matrix.logstash }}" infinity
+          docker exec -e JAVA_HOME=/usr/share/logstash/jdk "$container" /usr/share/logstash/vendor/jruby/bin/jruby -S gem install rspec -v 3.13.0 --no-document
+          jruby_version="$(docker exec "$container" /usr/share/logstash/vendor/jruby/bin/jruby -e 'print RbConfig::CONFIG["ruby_version"]')"
+          gem_path="/root/.local/share/gem/jruby/$jruby_version:/usr/share/logstash/vendor/jruby/lib/ruby/gems/shared:/usr/share/logstash/vendor/bundle/jruby/$jruby_version"
+          docker exec -e JAVA_HOME=/usr/share/logstash/jdk -e GEM_PATH="$gem_path" "$container" /usr/share/logstash/vendor/jruby/bin/jruby -S rspec spec
+          docker exec --user logstash "$container" sh /work/test/integration/run_in_logstash.sh
+          docker exec -e JAVA_HOME=/usr/share/logstash/jdk "$container" /usr/share/logstash/bin/logstash-plugin install --no-verify /work/logstash-input-microsoft365-0.1.0.gem
+          mkdir -p tmp
+          cat > tmp/ci.conf <<'PIPELINE'
+          input {
+            microsoft365 {
+              tenant_id => "00000000-0000-0000-0000-000000000001"
+              client_id => "00000000-0000-0000-0000-000000000002"
+              client_secret => "configuration-check-only"
+              state_path => "/tmp/m365-ci-state"
+              collectors => ["signin"]
+            }
+          }
+          output { stdout { codec => rubydebug } }
+          PIPELINE
+          docker exec -u logstash -e JAVA_HOME=/usr/share/logstash/jdk "$container" /usr/share/logstash/bin/logstash --config.test_and_exit --path.data /tmp/m365-ci-data --path.logs /tmp/m365-ci-logs -f /work/tmp/ci.conf
+          mkdir -p tmp/pkg
+          archive="/work/tmp/pkg/logstash-input-microsoft365-${{ matrix.logstash }}-offline.zip"
+          docker exec -e JAVA_HOME=/usr/share/logstash/jdk "$container" /usr/share/logstash/bin/logstash-plugin prepare-offline-pack --output "$archive" logstash-input-microsoft365
+          docker run -d --name "$offline_container" --user root --network none --entrypoint sleep -v "$PWD:/work" -w /work "docker.elastic.co/logstash/logstash:${{ matrix.logstash }}" infinity
+          docker exec -e JAVA_HOME=/usr/share/logstash/jdk "$offline_container" /usr/share/logstash/bin/logstash-plugin install "file://$archive"
+          docker exec -u logstash -e JAVA_HOME=/usr/share/logstash/jdk "$offline_container" /usr/share/logstash/bin/logstash --config.test_and_exit --path.data /tmp/m365-offline-ci-data --path.logs /tmp/m365-offline-ci-logs -f /work/tmp/ci.conf
+      - uses: actions/upload-artifact@v4
+        with:
+          name: logstash-input-microsoft365-${{ matrix.logstash }}
+          path: |
+            logstash-input-microsoft365-0.1.0.gem
+            tmp/pkg/logstash-input-microsoft365-${{ matrix.logstash }}-offline.zip
