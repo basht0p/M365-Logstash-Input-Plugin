@@ -158,20 +158,26 @@ Dir.mktmpdir('m365-logstash-runtime-') do |root|
     reopened.close
   end
 
-  # Shutdown must release a worker blocked by a full output queue without marking
-  # its record or advancing a window that Logstash never accepted.
+  # Use Logstash's real Java-backed memory queue writer. With a one-event
+  # capacity and no reader, shutdown must release a blocked plugin worker.
   blocked_path = File.join(root, 'blocked-state')
   blocked_input = LogStash::Inputs::Microsoft365.new(config.merge('state_path' => blocked_path))
   blocked_input.register
   blocked_state = blocked_input.instance_variable_get(:@state)
   blocked_http = LocalHTTP.new(record.merge('id' => 'blocked-signin'))
   blocked_input.instance_variable_set(:@http, blocked_http)
-  blocked_queue = SizedQueue.new(1)
-  blocked_queue << :blocker
-  blocked_thread = Thread.new { blocked_input.run(blocked_queue) }
+  LogStash::SETTINGS.set('pipeline.batch.size', 1)
+  LogStash::SETTINGS.set('pipeline.workers', 1)
+  memory_queue = LogStash::QueueFactory.create(LogStash::SETTINGS)
+  memory_writer = memory_queue.write_client
+  assert(memory_writer.is_a?(LogStash::MemoryWriteClient), 'must use the actual Logstash Java memory queue writer')
+  memory_writer << LogStash::Event.new('message' => 'blocker')
+  blocked_thread = Thread.new { blocked_input.run(memory_writer) }
   begin
-    wait_until { !blocked_http.calls.empty? }
-    assert(blocked_queue.length == 1, 'blocked queue must remain full before stop')
+    wait_until { !blocked_http.calls.empty? && blocked_input.instance_variable_get(:@enqueue_mutex).synchronize { !blocked_input.instance_variable_get(:@enqueue_threads).empty? } }
+    sleep 0.15
+    assert(blocked_thread.alive?, 'real Logstash writer should block on full memory queue')
+    assert(!blocked_state.seen?('signin', 'blocked-signin', 'immutable'), 'blocked real-queue event must remain unseen')
     blocked_input.stop
     blocked_thread.join(8)
     assert(!blocked_thread.alive?, 'run must stop while output queue stays full')
@@ -180,10 +186,13 @@ Dir.mktmpdir('m365-logstash-runtime-') do |root|
     assert(blocked_state.checkpoint('signin:default:window').nil?, 'stopped blocked window must remain uncommitted')
   ensure
     if blocked_thread.alive?
-      blocked_queue.pop
-      blocked_thread.join(8)
+      reader = memory_queue.read_client
+      reader.set_batch_dimensions(1, 100)
+      reader.read_batch
+      blocked_thread.join(3)
     end
-    blocked_input.close
+    blocked_input.close unless blocked_thread.alive?
+    memory_queue.close
   end
   blocked_reopened = Support::State.new(path: blocked_path, tenant_id: TENANT, cloud: 'commercial')
   begin
@@ -191,6 +200,47 @@ Dir.mktmpdir('m365-logstash-runtime-') do |root|
     assert(blocked_reopened.checkpoint('signin:default:window').nil?, 'uncommitted window must stay absent after H2 reopen')
   ensure
     blocked_reopened.close
+  end
+
+  # Persistent queue writers can wait at their event limit even while the
+  # record has reached the queue file. H2 progress still must not commit until
+  # the writer returns to the input.
+  pq_state_path = File.join(root, 'pq-state')
+  pq_input = LogStash::Inputs::Microsoft365.new(config.merge('state_path' => pq_state_path))
+  pq_input.register
+  pq_state = pq_input.instance_variable_get(:@state)
+  pq_http = LocalHTTP.new(record.merge('id' => 'pq-signin'))
+  pq_input.instance_variable_set(:@http, pq_http)
+  LogStash::SETTINGS.set('queue.type', 'persisted')
+  LogStash::SETTINGS.set('queue.max_events', 1)
+  LogStash::SETTINGS.set('path.queue', File.join(root, 'persistent-queue'))
+  persisted_queue = LogStash::QueueFactory.create(LogStash::SETTINGS)
+  persisted_writer = persisted_queue.write_client
+  assert(persisted_writer.is_a?(LogStash::AckedWriteClient), 'must use the actual Logstash persistent queue writer')
+  pq_thread = Thread.new { pq_input.run(persisted_writer) }
+  begin
+    wait_until { !pq_http.calls.empty? && pq_input.instance_variable_get(:@enqueue_mutex).synchronize { !pq_input.instance_variable_get(:@enqueue_threads).empty? } }
+    sleep 0.15
+    assert(pq_thread.alive?, 'persistent queue write should wait at its event limit')
+    assert(pq_input.instance_variable_get(:@enqueue_mutex).synchronize { !pq_input.instance_variable_get(:@enqueue_threads).empty? }, 'persistent queue writer must still be inside enqueue when stopped')
+    assert(!pq_state.seen?('signin', 'pq-signin', 'immutable'), 'pending persistent-queue record must be unseen')
+    pq_input.stop
+    pq_thread.join(8)
+    assert(!pq_thread.alive?, 'run must stop while persistent queue writer waits')
+    pq_thread.value
+    assert(!pq_state.seen?('signin', 'pq-signin', 'immutable'), 'stopped persistent-queue event must remain unseen')
+    assert(pq_state.checkpoint('signin:default:window').nil?, 'stopped persistent-queue window must remain uncommitted')
+  ensure
+    persisted_queue.close
+    pq_thread.join(3) if pq_thread.alive?
+    pq_input.close unless pq_thread.alive?
+  end
+  pq_reopened = Support::State.new(path: pq_state_path, tenant_id: TENANT, cloud: 'commercial')
+  begin
+    assert(!pq_reopened.seen?('signin', 'pq-signin', 'immutable'), 'pending persistent-queue event must remain unseen after H2 reopen')
+    assert(pq_reopened.checkpoint('signin:default:window').nil?, 'pending persistent-queue window must remain uncommitted after H2 reopen')
+  ensure
+    pq_reopened.close
   end
 
   pfx = File.join(root, 'test.pfx')
@@ -207,5 +257,5 @@ Dir.mktmpdir('m365-logstash-runtime-') do |root|
     cert_input.close
   end
 
-  puts 'PASS real Logstash runtime: Base/Event, MSAL4J secret+PFX, H2 lock/reopen, backpressure and blocked shutdown, mutable updates, fields, metadata'
+  puts 'PASS real Logstash runtime: Base/Event, MSAL4J secret+PFX, H2 lock/reopen, memory and persistent queue shutdown, mutable updates, fields, metadata'
 end

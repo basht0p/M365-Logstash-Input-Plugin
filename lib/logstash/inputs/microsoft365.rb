@@ -132,6 +132,11 @@ class LogStash::Inputs::Microsoft365 < LogStash::Inputs::Base
             @health_mutex.synchronize { @health[name] = { status: 'ok', last_success: Time.now.utc.iso8601(3) } }
           rescue LogStash::Inputs::Microsoft365Support::QueueStopped
             # A stopped queue write has not committed source progress; replay will resume it.
+          rescue Java::JavaLang::InterruptedException => e
+            unless @stopped
+              metric_for.call(name)&.increment(:errors)
+              @logger.error('Microsoft 365 collector interrupted', collector: name, error_class: e.class.name)
+            end
           rescue StandardError => e
             metric_for.call(name)&.increment(:errors)
             pause = e.is_a?(LogStash::Inputs::Microsoft365Support::HTTPError) && [400, 401, 403, 404].include?(e.status)
@@ -185,8 +190,18 @@ class LogStash::Inputs::Microsoft365 < LogStash::Inputs::Base
   def stop
     @stopped = true
     @enqueue_mutex&.synchronize do
-      @enqueue_threads.uniq.each do |worker|
-        worker.raise(LogStash::Inputs::Microsoft365Support::QueueStopped.new('Input stopped during queue write')) if worker.alive?
+      @enqueue_threads.each do |entry|
+        next if entry[:native_signalled] || !entry[:ruby].alive?
+        entry[:native_signalled] = true
+        entry[:java].interrupt
+      end
+    end
+    sleep 0.1
+    @enqueue_mutex&.synchronize do
+      @enqueue_threads.each do |entry|
+        next if entry[:ruby_signalled] || !entry[:ruby].alive?
+        entry[:ruby_signalled] = true
+        entry[:ruby].raise(LogStash::Inputs::Microsoft365Support::QueueStopped.new('Input stopped during queue write'))
       end
     end
   end
@@ -206,18 +221,23 @@ class LogStash::Inputs::Microsoft365 < LogStash::Inputs::Base
   def track_enqueue_start
     @enqueue_mutex.synchronize do
       raise LogStash::Inputs::Microsoft365Support::QueueStopped, 'Input stopped before queue write' if @stopped
-      @enqueue_threads << Thread.current
+      @enqueue_threads << { ruby: Thread.current, java: java.lang.Thread.currentThread, native_signalled: false, ruby_signalled: false }
     end
   end
 
   def track_enqueue_end
-    @enqueue_mutex.synchronize { @enqueue_threads.delete(Thread.current) }
+    @enqueue_mutex.synchronize do
+      java.lang.Thread.interrupted
+      @enqueue_threads.delete_if { |entry| entry[:ruby] == Thread.current }
+    end
   end
 
   def track_enqueue_commit
     @enqueue_mutex.synchronize do
+      java.lang.Thread.interrupted
+      raise LogStash::Inputs::Microsoft365Support::QueueStopped, 'Input stopped before queue commit' if @stopped
       yield
-      @enqueue_threads.delete(Thread.current)
+      @enqueue_threads.delete_if { |entry| entry[:ruby] == Thread.current }
     end
   end
 
