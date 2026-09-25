@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "clouds": {
+    "commercial": {"authority_host": "login.microsoftonline.com", "graph_base_url": "https://graph.microsoft.com", "activity_base_url": "https://manage.office.com", "graph_environment": "Global"},
+    "gcc": {"authority_host": "login.microsoftonline.com", "graph_base_url": "https://graph.microsoft.com", "activity_base_url": "https://manage-gcc.office.com", "graph_environment": "Global"},
+    "gcc_high": {"authority_host": "login.microsoftonline.us", "graph_base_url": "https://graph.microsoft.us", "activity_base_url": "https://manage.office365.us", "graph_environment": "USGov"},
+    "dod": {"authority_host": "login.microsoftonline.us", "graph_base_url": "https://dod-graph.microsoft.us", "activity_base_url": "https://manage.protection.apps.mil", "graph_environment": "USGovDoD"}
+  },
+  "resources": {
+    "graph": {"app_id": "00000003-0000-0000-c000-000000000000"},
+    "activity": {"app_id": "c5393580-f805-4401-95e8-94b7a6ef2fc2"}
+  },
+  "collectors": {
+    "activity": {"resource": "activity", "permissions": ["ActivityFeed.Read"], "optional_permissions": ["ActivityFeed.ReadDlp"], "endpoint": "/api/v1.0/{tenant_id}/activity/feed/subscriptions/content", "api_version": "v1.0", "experimental": false, "pagination": "NextPageUri", "strategy": "availability_window", "timestamp_field": "contentCreated", "identity_fields": ["Id"]},
+    "signin": {"resource": "graph", "permissions": ["AuditLog.Read.All"], "optional_permissions": ["Policy.Read.ConditionalAccess"], "endpoint": "/auditLogs/signIns", "api_version": "v1.0", "experimental": false, "pagination": "@odata.nextLink", "strategy": "time_window", "timestamp_field": "createdDateTime", "identity_fields": ["id"]},
+    "signin_beta": {"resource": "graph", "permissions": ["AuditLog.Read.All"], "optional_permissions": ["Policy.Read.ConditionalAccess"], "endpoint": "/auditLogs/signIns", "api_version": "beta", "experimental": true, "pagination": "@odata.nextLink", "strategy": "time_window", "timestamp_field": "createdDateTime", "identity_fields": ["id"]},
+    "directory_audit": {"resource": "graph", "permissions": ["AuditLog.Read.All"], "optional_permissions": [], "endpoint": "/auditLogs/directoryAudits", "api_version": "v1.0", "experimental": false, "pagination": "@odata.nextLink", "strategy": "time_window", "timestamp_field": "activityDateTime", "identity_fields": ["id"]},
+    "defender_alert": {"resource": "graph", "permissions": ["SecurityAlert.Read.All"], "optional_permissions": [], "endpoint": "/security/alerts_v2", "api_version": "v1.0", "experimental": false, "pagination": "@odata.nextLink", "strategy": "time_window", "timestamp_field": "lastUpdateDateTime", "identity_fields": ["id"]},
+    "defender_incident": {"resource": "graph", "permissions": ["SecurityIncident.Read.All"], "optional_permissions": [], "endpoint": "/security/incidents", "api_version": "v1.0", "experimental": false, "pagination": "@odata.nextLink", "strategy": "time_window", "timestamp_field": "lastUpdateDateTime", "identity_fields": ["id"]},
+    "risk_detection": {"resource": "graph", "permissions": ["IdentityRiskEvent.Read.All"], "optional_permissions": [], "endpoint": "/identityProtection/riskDetections", "api_version": "v1.0", "experimental": false, "pagination": "@odata.nextLink", "strategy": "full_reconcile", "timestamp_field": "detectedDateTime", "identity_fields": ["id"]},
+    "risky_user": {"resource": "graph", "permissions": ["IdentityRiskyUser.Read.All"], "optional_permissions": [], "endpoint": "/identityProtection/riskyUsers", "api_version": "v1.0", "experimental": false, "pagination": "@odata.nextLink", "strategy": "full_reconcile", "timestamp_field": "riskLastUpdatedDateTime", "identity_fields": ["id"]},
+    "hunting": {"resource": "graph", "permissions": ["ThreatHunting.Read.All"], "optional_permissions": [], "endpoint": "/security/runHuntingQuery", "api_version": "v1.0", "experimental": false, "pagination": "none", "strategy": "query_window", "timestamp_field": "Timestamp", "identity_fields": []}
+  }
+}
