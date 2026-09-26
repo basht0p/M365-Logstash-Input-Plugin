@@ -5,6 +5,7 @@ require 'uri'
 require 'json'
 require 'time'
 require 'openssl'
+require_relative 'errors'
 
 module LogStash
   module Inputs
@@ -24,11 +25,19 @@ module LogStash
 
       class HTTP
         RETRYABLE = [429, 500, 502, 503, 504].freeze
+        TRANSPORT_ERRORS = [IOError, EOFError, SocketError, Timeout::Error, OpenSSL::SSL::SSLError, Errno::ECONNRESET,
+                            Errno::ECONNREFUSED, Errno::ECONNABORTED, Errno::EHOSTUNREACH, Errno::ENETUNREACH,
+                            Errno::EPIPE, Errno::ETIMEDOUT].freeze
+        KEEP_ALIVE_SECONDS = 30
         attr_accessor :on_retry
+
+        class Interrupted < Stopped; end
 
         def initialize(cloud:, auth:, stop:, logger:, proxy: nil, open_timeout: 15, read_timeout: 60, max_retries: 5, max_body_bytes: 32 * 1024 * 1024)
           @cloud, @auth, @stop, @logger = cloud, auth, stop, logger
           @proxy, @open_timeout, @read_timeout, @max_retries, @max_body_bytes = proxy, open_timeout, read_timeout, max_retries, max_body_bytes
+          @connections = {}
+          @connections_mutex = Mutex.new
         end
 
         def get(resource, path, headers: {})
@@ -47,7 +56,7 @@ module LogStash
             raise Interrupted, 'Microsoft 365 input stopped' if @stop.call
             begin
               response, body_text = perform(method, resource, uri, payload, headers)
-            rescue IOError, EOFError, SocketError, Timeout::Error, Errno::ECONNRESET, Errno::ETIMEDOUT => e
+            rescue *TRANSPORT_ERRORS => e
               raise if tries >= @max_retries
               tries += 1
               @logger.warn('Microsoft API transport retry', error_class: e.class.name, resource: resource)
@@ -68,7 +77,7 @@ module LogStash
               interruptible_sleep(wait)
               next
             end
-            raise HTTPError.new(status, uri.path, '') unless status.between?(200, 299)
+            raise HTTPError.new(status, uri.path, error_detail(body_text)) unless status.between?(200, 299)
 
             parsed = body_text.empty? ? nil : JSON.parse(body_text)
             return Response.new(body: parsed, headers: response.each_header.to_h, status: status)
@@ -85,21 +94,20 @@ module LogStash
           uri
         end
 
+        # Closes every pooled connection.
+        def close
+          connections = @connections_mutex.synchronize do
+            all = @connections.values
+            @connections.clear
+            all
+          end
+          connections.each { |connection| finish(connection) }
+        end
+
         private
 
-        class Interrupted < StandardError; end
-
         def perform(method, resource, uri, payload, headers)
-          http = if @proxy
-                   proxy_uri = URI.parse(@proxy)
-                   Net::HTTP.new(uri.host, uri.port, proxy_uri.host, proxy_uri.port, proxy_uri.user, proxy_uri.password)
-                 else
-                   Net::HTTP.new(uri.host, uri.port)
-                 end
-          http.use_ssl = true
-          http.verify_mode = OpenSSL::SSL::VERIFY_PEER
-          http.open_timeout = @open_timeout
-          http.read_timeout = @read_timeout
+          http = connection(uri)
           request = method == :post ? Net::HTTP::Post.new(uri) : Net::HTTP::Get.new(uri)
           request['Authorization'] = "Bearer #{@auth.token(resource)}"
           request['Accept'] = 'application/json'
@@ -116,6 +124,59 @@ module LogStash
             end
           end
           [response, body_text]
+        rescue StandardError
+          # The connection may hold a partially read response; never reuse it.
+          discard(uri)
+          raise
+        end
+
+        # One keep-alive connection per worker thread and host, so pages and blobs reuse TLS sessions.
+        def connection(uri)
+          key = connection_key(uri)
+          existing = @connections_mutex.synchronize { @connections[key] }
+          return existing if existing&.started?
+
+          http = if @proxy
+                   proxy_uri = URI.parse(@proxy)
+                   Net::HTTP.new(uri.host, uri.port, proxy_uri.host, proxy_uri.port, proxy_uri.user, proxy_uri.password)
+                 else
+                   # nil disables Net::HTTP's http_proxy environment lookup, matching MSAL, which ignores it.
+                   Net::HTTP.new(uri.host, uri.port, nil)
+                 end
+          http.use_ssl = true
+          http.verify_mode = OpenSSL::SSL::VERIFY_PEER
+          http.open_timeout = @open_timeout
+          http.read_timeout = @read_timeout
+          http.keep_alive_timeout = KEEP_ALIVE_SECONDS
+          http.start
+          @connections_mutex.synchronize { @connections[key] = http }
+          http
+        end
+
+        def discard(uri)
+          connection = @connections_mutex.synchronize { @connections.delete(connection_key(uri)) }
+          finish(connection) if connection
+        end
+
+        def finish(connection)
+          connection.finish if connection.started?
+        rescue StandardError
+          nil
+        end
+
+        def connection_key(uri)
+          [Thread.current.object_id, uri.host, uri.port]
+        end
+
+        # Graph and the Management API return {"error":{"code":...,"message":...}}. Only the code and message are
+        # kept, truncated by HTTPError; response bodies never contain record data on error.
+        def error_detail(body_text)
+          error = JSON.parse(body_text)['error']
+          return '' unless error.is_a?(Hash)
+
+          [error['code'], error['message']].compact.join(': ')
+        rescue JSON::ParserError, TypeError, NoMethodError
+          ''
         end
 
         def retry_delay(value, tries)
