@@ -11,6 +11,9 @@ module LogStash
       # Each public operation is transactional and synchronized because collectors share one H2 connection.
       # The directory lock prevents two Logstash processes from owning the same checkpoints.
       class State
+        TOUCH_AFTER = 86_400
+        PRUNE_BATCH = 50_000
+
         def initialize(path:, tenant_id:, cloud:, max_pending: 10_000)
           raise 'H2 state requires JRuby' unless defined?(JRUBY_VERSION)
 
@@ -33,6 +36,7 @@ module LogStash
           execute('MERGE INTO metadata (name,payload) KEY(name) VALUES (?,?)', 'schema', '1')
           execute('CREATE TABLE IF NOT EXISTS checkpoints (namespace VARCHAR(512) NOT NULL, name VARCHAR(512) NOT NULL, payload CLOB NOT NULL, PRIMARY KEY(namespace,name))')
           execute('CREATE TABLE IF NOT EXISTS seen (namespace VARCHAR(512) NOT NULL, name VARCHAR(512) NOT NULL, identity_hash VARCHAR(64) NOT NULL, version_hash VARCHAR(64) NOT NULL, touched_at BIGINT NOT NULL, PRIMARY KEY(namespace,name,identity_hash,version_hash))')
+          execute('CREATE INDEX IF NOT EXISTS seen_touched ON seen(namespace, touched_at)')
           execute('CREATE TABLE IF NOT EXISTS pending (namespace VARCHAR(512) NOT NULL, name VARCHAR(512) NOT NULL, identity_hash VARCHAR(64) NOT NULL, payload CLOB NOT NULL, PRIMARY KEY(namespace,name,identity_hash))')
         rescue StandardError
           close
@@ -51,9 +55,38 @@ module LogStash
           end
         end
 
-        def seen?(name, identity, version)
+        # Writes several checkpoints in one transaction. A nil value deletes that checkpoint.
+        def set_checkpoints(values)
           @mutex.synchronize do
-            !!query_one('SELECT version_hash FROM seen WHERE namespace=? AND name=? AND identity_hash=? AND version_hash=?', @namespace, name, hash(identity), hash(version))
+            @connection.setAutoCommit(false)
+            begin
+              values.each do |name, value|
+                if value.nil?
+                  execute('DELETE FROM checkpoints WHERE namespace=? AND name=?', @namespace, name)
+                else
+                  execute('MERGE INTO checkpoints (namespace,name,payload) KEY(namespace,name) VALUES (?,?,?)', @namespace, name, value.to_s)
+                end
+              end
+              @connection.commit
+            rescue StandardError, java.sql.SQLException
+              @connection.rollback
+              raise
+            ensure
+              @connection.setAutoCommit(true)
+            end
+          end
+        end
+
+        # touch: extend the entry's lifetime when it was last touched more than TOUCH_AFTER seconds ago.
+        def seen?(name, identity, version, touch: false)
+          @mutex.synchronize do
+            keys = [@namespace, name, hash(identity), hash(version)]
+            found = !!query_one('SELECT version_hash FROM seen WHERE namespace=? AND name=? AND identity_hash=? AND version_hash=?', *keys)
+            if found && touch
+              now = Time.now.to_i
+              execute('UPDATE seen SET touched_at=? WHERE namespace=? AND name=? AND identity_hash=? AND version_hash=? AND touched_at<?', now, *keys, now - TOUCH_AFTER)
+            end
+            found
           end
         end
 
@@ -63,12 +96,17 @@ module LogStash
           end
         end
 
-        def prune_seen(before:, limit: 100_000)
-          @mutex.synchronize do
-            execute('DELETE FROM seen WHERE namespace=? AND touched_at<?', @namespace, before.to_i)
-            count = query_one('SELECT COUNT(*) FROM seen WHERE namespace=?', @namespace).first.to_i
-            excess = count - limit
-            execute('DELETE FROM seen WHERE namespace=? AND (name,identity_hash,version_hash) IN (SELECT name,identity_hash,version_hash FROM seen WHERE namespace=? ORDER BY touched_at ASC LIMIT ?)', @namespace, @namespace, excess) if excess.positive?
+        # Deletes dedupe entries last touched before `before`. There is deliberately no row cap: dropping entries
+        # that are still inside the overlap or reconciliation horizon re-emits their records. Deletes run in
+        # batches, releasing the lock between them so collectors are not stalled. Returns the number deleted.
+        def prune_seen(before:, batch: PRUNE_BATCH)
+          deleted = 0
+          loop do
+            count = @mutex.synchronize do
+              execute('DELETE FROM seen WHERE namespace=? AND touched_at<? FETCH FIRST ? ROWS ONLY', @namespace, before.to_i, batch)
+            end
+            deleted += count
+            return deleted if count < batch
           end
         end
 

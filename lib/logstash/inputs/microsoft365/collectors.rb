@@ -5,6 +5,8 @@ require 'time'
 require 'uri'
 require 'digest'
 require_relative 'manifest'
+require_relative 'errors'
+require_relative 'windows'
 
 module LogStash
   module Inputs
@@ -12,78 +14,42 @@ module LogStash
       class GraphCollector
         MAX_PAGES = 1000
         MAX_WINDOW = 3600
+        DEFAULT_PAGE_SIZE = 100
 
-        def initialize(name:, http:, state:, emitter:, config:, stop:, clock: -> { Time.now.utc })
+        def initialize(name:, http:, state:, emitter:, config:, stop:, clock: -> { Time.now.utc }, max_pages: MAX_PAGES)
           @name, @http, @state, @emitter, @config, @stop, @clock = name, http, state, emitter, config, stop, clock
+          @max_pages = max_pages
           @spec = Manifest.collector(name)
+          @windows = TimeWindows.new(state: state, config: config, clock: clock, max_window: MAX_WINDOW)
         end
 
         def run_once
-          return reconcile if @spec.fetch('strategy') == 'full_reconcile'
-          if @name == 'signin_beta'
-            @config.fetch(:signin_types).each do |type|
-              run_window(type)
-              reconcile_window(type)
-            end
-          else
-            run_window
-            reconcile_window
-          end
-        end
+          return reconcile_all if @spec.fetch('strategy') == 'full_reconcile'
 
-        def run_window(signin_type = nil)
-          key = "#{@name}:#{signin_type || 'default'}:window"
-          now = @clock.call.utc
-          previous = @state.checkpoint(key)
-          start_at = previous ? Time.iso8601(previous) - @config.fetch(:overlap) : now - @config.fetch(:initial_lookback)
-          replay_from = @config[:replay_from]
-          if replay_from
-            replay_key = "#{key}:replay:#{replay_from}"
-            start_at = [start_at, Time.iso8601(replay_from)].min unless @state.checkpoint(replay_key)
+          signin_types = @name == 'signin_beta' ? @config.fetch(:signin_types) : [nil]
+          signin_types.each do |type|
+            prefix = "#{@name}:#{type || 'default'}"
+            @windows.advance("#{prefix}:window") { |start_at, finish_at, force| fetch_window(start_at, finish_at, type, force: force) }
+            @windows.reconcile("#{prefix}:reconcile") { |start_at, finish_at| fetch_window(start_at, finish_at, type) }
           end
-          finish_at = [start_at + MAX_WINDOW, now].min
-          return if finish_at <= start_at
-
-          fetch_window(start_at, finish_at, signin_type)
-          @state.set_checkpoint(key, finish_at.iso8601(3))
-          @state.set_checkpoint(replay_key, 'done') if replay_from && replay_key
         end
 
         private
 
-        def reconcile_window(signin_type = nil)
-          group = "#{@name}:#{signin_type || 'default'}:reconcile"
-          now = @clock.call.utc
-          last_started = @state.checkpoint("#{group}:last_started")
-          cursor_text = @state.checkpoint("#{group}:cursor")
-          target_text = @state.checkpoint("#{group}:target")
-          if !cursor_text || cursor_text.empty?
-            return if last_started && now - Time.iso8601(last_started) < @config.fetch(:reconciliation_interval)
-            @state.set_checkpoint("#{group}:target", now.iso8601(3))
-            target_text = now.iso8601(3)
-            start_at = now - @config.fetch(:replay_horizon)
-            @state.set_checkpoint("#{group}:cursor", start_at.iso8601(3))
-            @state.set_checkpoint("#{group}:last_started", now.iso8601(3))
-          else
-            start_at = Time.iso8601(cursor_text)
-          end
-          target = target_text && !target_text.empty? ? Time.iso8601(target_text) : now
-          finish_at = [start_at + MAX_WINDOW, target].min
-          return if finish_at <= start_at
-          fetch_window(start_at, finish_at, signin_type)
-          @state.set_checkpoint("#{group}:cursor", finish_at >= target ? '' : finish_at.iso8601(3))
-        end
-
-        def reconcile
+        # Lists the whole collection. Dedupe entries of unchanged records are refreshed so they don't
+        # expire while the source still returns them.
+        def reconcile_all
           fetch_pages(url_for(nil, nil)) do |record|
-            emit(record, mutable: true)
+            emit(record, mutable: true, refresh: true)
           end
           @state.set_checkpoint("#{@name}:reconciled", @clock.call.utc.iso8601(3))
+        rescue WindowTooLarge => e
+          raise "#{e.message}; #{@name} lists its whole collection and cannot split it"
         end
 
-        def fetch_window(start_at, finish_at, signin_type = nil)
+        def fetch_window(start_at, finish_at, signin_type = nil, force: false)
           fetch_pages(url_for(start_at, finish_at, signin_type)) do |record|
-            emit(record, mutable: mutable?, collector_name: signin_type ? "signin_beta.#{signin_type}" : @name)
+            emit(record, mutable: mutable?, collector_name: signin_type ? "signin_beta.#{signin_type}" : @name, force: force)
           end
         end
 
@@ -92,15 +58,15 @@ module LogStash
         end
 
         def url_for(start_at, finish_at, signin_type = nil)
-          version = @spec.fetch('api_version')
-          endpoint = @spec.fetch('endpoint')
-          url = "/#{version}#{endpoint}"
-          return url if start_at.nil?
-
-          field = @spec.fetch('timestamp_field')
-          filter = "#{field} ge #{start_at.iso8601(3)} and #{field} le #{finish_at.iso8601(3)}"
-          filter += " and signInEventTypes/any(t: t eq '#{signin_type}')" if signin_type
-          "#{url}?#{URI.encode_www_form('$filter' => filter, '$top' => 100)}"
+          url = "/#{@spec.fetch('api_version')}#{@spec.fetch('endpoint')}"
+          query = { '$top' => @spec.fetch('page_size', DEFAULT_PAGE_SIZE) }
+          if start_at
+            field = @spec.fetch('timestamp_field')
+            filter = "#{field} ge #{start_at.iso8601(3)} and #{field} le #{finish_at.iso8601(3)}"
+            filter += " and signInEventTypes/any(t: t eq '#{signin_type}')" if signin_type
+            query = { '$filter' => filter }.merge(query)
+          end
+          "#{url}?#{URI.encode_www_form(query)}"
         end
 
         def fetch_pages(first_url)
@@ -108,45 +74,81 @@ module LogStash
           visited = {}
           pages = 0
           while url
-            raise 'Microsoft 365 collection stopped' if @stop.call
+            raise Stopped, 'Microsoft 365 collection stopped' if @stop.call
             raise "Repeated Graph nextLink for #{@name}" if visited[url]
-            raise "Graph pagination limit exceeded for #{@name}" if pages >= MAX_PAGES
+            raise WindowTooLarge, "#{@name} needed more than #{@max_pages} pages" if pages >= @max_pages
+
             visited[url] = true
             response = @http.get('graph', url)
             data = response.body
             raise "Invalid Graph response for #{@name}" unless data.is_a?(Hash) && data['value'].is_a?(Array)
+
             data['value'].each { |record| yield record }
             url = data['@odata.nextLink']
             pages += 1
           end
         end
 
-        def emit(record, mutable: false, collector_name: @name)
+        def emit(record, mutable: false, collector_name: @name, force: false, refresh: false)
           id = record.fetch('id')
           timestamp = record[@spec.fetch('timestamp_field')]
-          @emitter.emit(collector: collector_name, raw: record, identity: id, timestamp: timestamp, mutable: mutable)
+          @emitter.emit(collector: collector_name, raw: record, identity: id, timestamp: timestamp, mutable: mutable,
+                        force: force, refresh: refresh)
         end
       end
 
       class ActivityCollector
         MAX_PAGES = 1000
         MAX_WINDOW = 86_400
+        # The Management API serves content from the last seven days; keep a margin for clock skew.
+        MAX_AGE = 7 * 86_400 - 900
+        FAILURE_BACKOFF = 3600
+        FORCE_FIELD = '_m365_force'
 
-        def initialize(http:, state:, emitter:, config:, stop:, clock: -> { Time.now.utc })
+        def initialize(http:, state:, emitter:, config:, stop:, clock: -> { Time.now.utc }, max_pages: MAX_PAGES)
           @http, @state, @emitter, @config, @stop, @clock = http, state, emitter, config, stop, clock
+          @max_pages = max_pages
           @tenant_id = config.fetch(:tenant_id)
+          @windows = TimeWindows.new(state: state, config: config, clock: clock, max_window: MAX_WINDOW, max_age: MAX_AGE)
+          @retry_at = {}
+          @gaps = []
         end
 
+        # Content types are collected independently: one failing or paused type does not block the others.
         def run_once
+          @gaps = []
+          failures = {}
           @config.fetch(:activity_content_types).each do |type|
-            next unless ensure_subscription(type)
-            drain_pending(type)
-            discover(type)
-            reconcile(type)
+            next if @retry_at[type] && @clock.call.utc < @retry_at[type]
+
+            begin
+              collect(type)
+              @retry_at.delete(type)
+            rescue QueueStopped, Stopped
+              raise
+            rescue StandardError => e
+              @retry_at[type] = @clock.call.utc + FAILURE_BACKOFF if Errors.pausing_http_error?(e)
+              failures[type] = e
+            end
           end
+          raise PartialFailure.new('activity', failures) unless failures.empty?
+          raise SourceGap, "Activity source gaps: #{@gaps.join('; ')}" unless @gaps.empty?
         end
 
         private
+
+        def collect(type)
+          return unless ensure_subscription(type)
+
+          drain_pending(type)
+          gap = @windows.advance("activity:#{type}:window") do |start_at, finish_at, force|
+            fetch_content_window(type, start_at, finish_at, force: force)
+          end
+          @gaps << "#{type} discovery skipped #{gap}" if gap
+          @windows.reconcile("activity:#{type}:reconcile") do |start_at, finish_at|
+            fetch_content_window(type, start_at, finish_at)
+          end
+        end
 
         def base_path
           "/api/v1.0/#{@tenant_id}/activity/feed/subscriptions"
@@ -161,72 +163,39 @@ module LogStash
           response = @http.get('activity', "#{base_path}/list?#{publisher_query.sub(/^&/, '')}")
           subscriptions = response.body
           raise 'Invalid Activity subscription response' unless subscriptions.is_a?(Array)
+
           existing = subscriptions.find { |item| item['contentType'] == type }
           return true if existing && existing['status'].to_s.casecmp('enabled').zero?
           raise "Activity subscription #{type} exists but is disabled; inspect tenant webhook settings" if existing
+
           last_start = @state.checkpoint("activity:#{type}:subscription_start")
           return false if last_start && @clock.call.utc - Time.iso8601(last_start) < 900
+
           @http.post('activity', "#{base_path}/start?contentType=#{URI.encode_www_form_component(type)}#{publisher_query}", {})
           @state.set_checkpoint("activity:#{type}:subscription_start", @clock.call.utc.iso8601(3))
           false
         end
 
-        def discover(type)
-          key = "activity:#{type}:window"
-          now = @clock.call.utc
-          previous = @state.checkpoint(key)
-          start_at = previous ? Time.iso8601(previous) - @config.fetch(:overlap) : now - @config.fetch(:initial_lookback)
-          replay_from = @config[:replay_from]
-          if replay_from
-            replay_key = "#{key}:replay:#{replay_from}"
-            start_at = [start_at, Time.iso8601(replay_from)].min unless @state.checkpoint(replay_key)
-          end
-          raise "Activity availability gap for #{type}: discovery is over seven days behind" if start_at < now - 7 * 86_400
-          finish_at = [start_at + MAX_WINDOW, now].min
-          return if finish_at <= start_at
-
-          fetch_content_window(type, start_at, finish_at)
-          @state.set_checkpoint(key, finish_at.iso8601(3))
-          @state.set_checkpoint(replay_key, 'done') if replay_from && replay_key
-        end
-
-        def reconcile(type)
-          group = "activity:#{type}:reconcile"
-          now = @clock.call.utc
-          last_started = @state.checkpoint("#{group}:last_started")
-          cursor_text = @state.checkpoint("#{group}:cursor")
-          target_text = @state.checkpoint("#{group}:target")
-          if !cursor_text || cursor_text.empty?
-            return if last_started && now - Time.iso8601(last_started) < @config.fetch(:reconciliation_interval)
-            @state.set_checkpoint("#{group}:target", now.iso8601(3))
-            target_text = now.iso8601(3)
-            start_at = now - @config.fetch(:replay_horizon)
-            @state.set_checkpoint("#{group}:cursor", start_at.iso8601(3))
-            @state.set_checkpoint("#{group}:last_started", now.iso8601(3))
-          else
-            start_at = Time.iso8601(cursor_text)
-          end
-          target = Time.iso8601(target_text)
-          finish_at = [start_at + MAX_WINDOW, target].min
-          return if finish_at <= start_at
-          fetch_content_window(type, start_at, finish_at)
-          @state.set_checkpoint("#{group}:cursor", finish_at >= target ? '' : finish_at.iso8601(3))
-        end
-
-        def fetch_content_window(type, start_at, finish_at)
+        def fetch_content_window(type, start_at, finish_at, force: false)
           url = "#{base_path}/content?contentType=#{URI.encode_www_form_component(type)}&startTime=#{URI.encode_www_form_component(start_at.iso8601)}&endTime=#{URI.encode_www_form_component(finish_at.iso8601)}#{publisher_query}"
           visited = {}
           pages = 0
           while url
-            raise 'Microsoft 365 collection stopped' if @stop.call
+            raise Stopped, 'Microsoft 365 collection stopped' if @stop.call
             raise "Repeated Activity NextPageUri for #{type}" if visited[url]
-            raise "Activity pagination limit exceeded for #{type}" if pages >= MAX_PAGES
+            raise WindowTooLarge, "Activity #{type} needed more than #{@max_pages} pages" if pages >= @max_pages
+
             visited[url] = true
             response = @http.get('activity', url)
             raise "Invalid Activity discovery response for #{type}" unless response.body.is_a?(Array)
+
             response.body.each do |blob|
               id = blob.fetch('contentId')
-              @state.add_pending("activity:#{type}", id, blob) unless @state.seen?("activity:#{type}:blob", id, 'done')
+              if force
+                @state.add_pending("activity:#{type}", id, blob.merge(FORCE_FIELD => true))
+              elsif !@state.seen?("activity:#{type}:blob", id, 'done')
+                @state.add_pending("activity:#{type}", id, blob)
+              end
             end
             drain_pending(type)
             url = response.headers['nextpageuri'] || response.headers['NextPageUri']
@@ -236,17 +205,24 @@ module LogStash
 
         def drain_pending(type)
           @state.pending("activity:#{type}").each do |id_hash, blob|
-            raise 'Microsoft 365 collection stopped' if @stop.call
+            raise Stopped, 'Microsoft 365 collection stopped' if @stop.call
+
             content_id = blob.fetch('contentId')
             if blob['contentExpiration'] && Time.iso8601(blob['contentExpiration']) < @clock.call.utc
-              raise "Activity blob #{content_id} expired before download; replay source gap"
+              # The API no longer serves this blob. Record the gap once and move on rather than retrying forever.
+              @gaps << "#{type} blob #{content_id} expired at #{blob['contentExpiration']} before download"
+              @state.mark_seen("activity:#{type}:blob", content_id, 'done')
+              @state.remove_pending_hash("activity:#{type}", id_hash)
+              next
             end
             records = @http.get('activity', blob.fetch('contentUri')).body
             raise "Invalid Activity blob #{content_id}" unless records.is_a?(Array)
+
             records.each do |record|
               identity = record['Id'] || record['id'] || Digest::SHA256.hexdigest(JSON.generate(record))
               timestamp = record['CreationTime'] || record['creationTime']
-              @emitter.emit(collector: "activity.#{type}", raw: record, identity: identity, timestamp: timestamp)
+              @emitter.emit(collector: "activity.#{type}", raw: record, identity: identity, timestamp: timestamp,
+                            force: blob[FORCE_FIELD] == true)
             end
             @state.mark_seen("activity:#{type}:blob", content_id, 'done')
             @state.remove_pending_hash("activity:#{type}", id_hash)

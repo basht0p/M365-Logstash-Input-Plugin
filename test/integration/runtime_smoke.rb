@@ -257,5 +257,19 @@ Dir.mktmpdir('m365-logstash-runtime-') do |root|
     cert_input.close
   end
 
-  puts 'PASS real Logstash runtime: Base/Event, MSAL4J secret+PFX, H2 lock/reopen, memory and persistent queue shutdown, mutable updates, fields, metadata'
+  # The Management API cannot serve content older than seven days, so an older replay would only produce a gap.
+  stale_replay = LogStash::Inputs::Microsoft365.new(config.merge(
+    'state_path' => File.join(root, 'replay-state'), 'collectors' => ['activity'],
+    'replay_from' => (Time.now.utc - 8 * 86_400).iso8601
+  ))
+  begin
+    stale_replay.register
+    raise 'stale Activity replay_from unexpectedly registered'
+  rescue LogStash::ConfigurationError => e
+    assert(e.message.include?('seven days'), "stale replay_from rejection: #{e.message}")
+  ensure
+    stale_replay.close
+  end
+
+  puts 'PASS real Logstash runtime: Base/Event, MSAL4J secret+PFX, H2 lock/reopen, memory and persistent queue shutdown, mutable updates, fields, metadata, config validation'
 end

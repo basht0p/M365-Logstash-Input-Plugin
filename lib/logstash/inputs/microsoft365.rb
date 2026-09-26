@@ -4,6 +4,7 @@ require 'logstash/inputs/base'
 require 'logstash/namespace'
 require 'time'
 require 'uri'
+require_relative 'microsoft365/errors'
 require_relative 'microsoft365/manifest'
 require_relative 'microsoft365/auth'
 require_relative 'microsoft365/http'
@@ -14,6 +15,11 @@ require_relative 'microsoft365/hunting'
 
 class LogStash::Inputs::Microsoft365 < LogStash::Inputs::Base
   config_name 'microsoft365'
+
+  # Dedupe entries must outlive every window that can re-read their records: the overlap sweep and a full
+  # reconciliation pass. Pruning is by age only and runs at most once per PRUNE_INTERVAL.
+  PRUNE_INTERVAL = 3600
+  MIN_DEDUPE_RETENTION = 10 * 86_400
 
   config :tenant_id, validate: :string, required: true
   config :client_id, validate: :string, required: true
@@ -55,6 +61,7 @@ class LogStash::Inputs::Microsoft365 < LogStash::Inputs::Base
     @health = {}
     @enqueue_mutex = Mutex.new
     @enqueue_threads = []
+    @prune_mutex = Mutex.new
     @state = LogStash::Inputs::Microsoft365Support::State.new(path: @state_path, tenant_id: @tenant_id, cloud: @cloud)
     cloud_config = LogStash::Inputs::Microsoft365Support::Manifest.cloud(@cloud)
     @auth = LogStash::Inputs::Microsoft365Support::Auth.new(
@@ -71,7 +78,7 @@ class LogStash::Inputs::Microsoft365 < LogStash::Inputs::Base
       signin_types: effective_signin_types, activity_content_types: effective_content_types,
       publisher_identifier: @publisher_identifier, hunting_interval: @hunting_interval.to_i,
       replay_from: @replay_from, reconciliation_interval: @reconciliation_interval.to_i,
-      replay_horizon: @replay_horizon.to_i
+      replay_horizon: @replay_horizon.to_i, poll_interval: @poll_interval.to_i
     }
   rescue StandardError
     @state&.close
@@ -132,38 +139,28 @@ class LogStash::Inputs::Microsoft365 < LogStash::Inputs::Base
             @health_mutex.synchronize { @health[name] = { status: 'ok', last_success: Time.now.utc.iso8601(3) } }
           rescue LogStash::Inputs::Microsoft365Support::QueueStopped
             # A stopped queue write has not committed source progress; replay will resume it.
+          rescue LogStash::Inputs::Microsoft365Support::Stopped => e
+            log_failure(name, e, metric_for) unless @stopped
           rescue Java::JavaLang::InterruptedException => e
             unless @stopped
               metric_for.call(name)&.increment(:errors)
               @logger.error('Microsoft 365 collector interrupted', collector: name, error_class: e.class.name)
             end
+          rescue LogStash::Inputs::Microsoft365Support::SourceGap => e
+            # Collection continued past records the source no longer serves; surface it without retrying.
+            metric_for.call(name)&.increment(:gaps)
+            metric_for.call(name)&.gauge(:last_success_epoch, Time.now.to_i)
+            @health_mutex.synchronize { @health[name] = { status: 'gap', last_success: Time.now.utc.iso8601(3) } }
+            @logger.warn('Microsoft 365 source gap', collector: name, error: e.message)
           rescue StandardError => e
-            metric_for.call(name)&.increment(:errors)
-            pause = e.is_a?(LogStash::Inputs::Microsoft365Support::HTTPError) && [400, 401, 403, 404].include?(e.status)
-            next_due = Time.now + 3600 if pause
-            metric_for.call(name)&.gauge(:healthy, 0)
-            @health_mutex.synchronize do
-              @health[name] = { status: pause ? 'paused' : 'error', error_class: e.class.name, retry_at: next_due&.utc&.iso8601(3) }
-            end
-            safe_error = case e
-                         when LogStash::Inputs::Microsoft365Support::HTTPError,
-                              LogStash::Inputs::Microsoft365Support::ResponseTooLarge
-                           e.message
-                         else
-                           e.class.name
-                         end
-            @logger.error('Microsoft 365 collector failed', collector: name, error_class: e.class.name, error: safe_error)
+            next_due = log_failure(name, e, metric_for)
           ensure
             Thread.current[:m365_collector] = nil
             schedule_mutex.synchronize do
               due[name] = next_due || Time.now + interval_for(name)
               active.delete(name)
             end
-            begin
-              @state.prune_seen(before: Time.now - 10 * 86_400)
-            rescue StandardError => prune_error
-              @logger.error('Microsoft 365 state pruning failed', error_class: prune_error.class.name)
-            end
+            prune_seen_if_due
           end
         end
       end
@@ -213,10 +210,42 @@ class LogStash::Inputs::Microsoft365 < LogStash::Inputs::Base
   def close
     stop
     @workers&.each { |worker| worker.join unless worker == Thread.current }
+    @http.close if @http.respond_to?(:close)
     @state&.close
   end
 
   private
+
+  # Returns the time the collector should next run when the failure pauses it, or nil.
+  def log_failure(name, error, metric_for)
+    support = LogStash::Inputs::Microsoft365Support
+    metric_for.call(name)&.increment(:errors)
+    pause = support::Errors.pausing_http_error?(error)
+    next_due = Time.now + 3600 if pause
+    metric_for.call(name)&.gauge(:healthy, 0)
+    @health_mutex.synchronize do
+      @health[name] = { status: pause ? 'paused' : 'error', error_class: error.class.name, retry_at: next_due&.utc&.iso8601(3) }
+    end
+    @logger.error('Microsoft 365 collector failed', collector: name, error_class: error.class.name, error: support::Errors.safe_message(error))
+    next_due
+  end
+
+  def dedupe_retention
+    [MIN_DEDUPE_RETENTION, @replay_horizon.to_i + @reconciliation_interval.to_i + 3 * @overlap.to_i + 86_400].max
+  end
+
+  def prune_seen_if_due
+    now = Time.now
+    due = @prune_mutex.synchronize do
+      next false if @last_prune && now - @last_prune < PRUNE_INTERVAL
+      @last_prune = now
+    end
+    return unless due
+
+    @state.prune_seen(before: now - dedupe_retention)
+  rescue StandardError => e
+    @logger.error('Microsoft 365 state pruning failed', error_class: e.class.name)
+  end
 
   def track_enqueue_start
     @enqueue_mutex.synchronize do
@@ -281,6 +310,9 @@ class LogStash::Inputs::Microsoft365 < LogStash::Inputs::Base
     if @replay_from
       parsed_replay = Time.iso8601(@replay_from)
       raise LogStash::ConfigurationError, 'replay_from must be in the past' if parsed_replay > Time.now
+      if @collectors.include?('activity') && parsed_replay < Time.now - 7 * 86_400
+        raise LogStash::ConfigurationError, 'replay_from cannot be more than seven days ago when activity is enabled'
+      end
     end
     if @proxy
       uri = URI.parse(@proxy)
