@@ -15,6 +15,13 @@ jobs:
       - name: Test tenant helper
         shell: pwsh
         run: Invoke-Pester -Path scripts/tests/Initialize-M365LogstashTenant.Tests.ps1 -CI
+      - name: Lint tenant helper
+        shell: pwsh
+        run: |
+          Install-Module PSScriptAnalyzer -RequiredVersion 1.23.0 -Scope CurrentUser -Force
+          $findings = @(Invoke-ScriptAnalyzer -Path scripts -Recurse -IncludeRule PSAvoidAssignmentToAutomaticVariable)
+          $findings | Format-Table -AutoSize | Out-String | Write-Host
+          if ($findings.Count -gt 0) { throw 'Assignment to a PowerShell automatic variable.' }
 
   logstash:
     runs-on: ubuntu-latest
@@ -44,6 +51,8 @@ jobs:
           jruby_version="$(docker exec -e JAVA_HOME=/usr/share/logstash/jdk "$container" /usr/share/logstash/vendor/jruby/bin/jruby -e 'print RbConfig::CONFIG["ruby_version"]')"
           gem_path="/root/.local/share/gem/jruby/$jruby_version:/usr/share/logstash/vendor/jruby/lib/ruby/gems/shared:/usr/share/logstash/vendor/bundle/jruby/$jruby_version"
           docker exec -e JAVA_HOME=/usr/share/logstash/jdk -e GEM_PATH="$gem_path" "$container" /usr/share/logstash/vendor/jruby/bin/jruby -S rspec spec
+          # High-volume collection against real H2 state (dedupe past 100k rows, window splitting).
+          timeout 300s docker exec -e JAVA_HOME=/usr/share/logstash/jdk -e GEM_PATH="$gem_path" -e M365_VOLUME=1 "$container" /usr/share/logstash/vendor/jruby/bin/jruby -S rspec spec --tag volume
           timeout 90s docker exec --user logstash "$container" sh /work/test/integration/run_in_logstash.sh
           docker exec -e JAVA_HOME=/usr/share/logstash/jdk "$container" /usr/share/logstash/bin/logstash-plugin install --no-verify /work/logstash-input-microsoft365-0.1.0.gem
           mkdir -p tmp

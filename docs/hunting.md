@@ -23,6 +23,8 @@ The file may be a JSON array of jobs or an object with a `jobs` array. Each job 
 
 Incremental jobs must include both `{{start}}` and `{{end}}` placeholders and filter the event timestamp to the half-open interval. The plugin replaces each placeholder with a complete KQL `datetime(...)` literal; do not wrap placeholders in another `datetime()` call. Include stable identity columns in `identity_fields` so overlapping retrievals can be deduplicated. Windows are at most one hour; when the response reaches `max_rows` or is too large, the collector splits the window and retries each half. If a result cap persists below the minimum split size, the job fails visibly and its checkpoint does not advance.
 
+A job's progress is stored under its `name` plus a hash of `query`, `mode`, `timestamp_field`, and `identity_fields`. Changing `interval`, `max_rows`, or `initial_lookback` keeps the job's progress and document IDs. Changing one of the hashed fields starts the job over from its lookback with new document IDs, because it returns different rows. To start a job over deliberately, rename it.
+
 A snapshot job reruns a query on the configured interval and should represent a point-in-time result set rather than an event stream:
 
 ```json
