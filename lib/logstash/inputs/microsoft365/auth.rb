@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative 'jars'
+require_relative 'errors'
 require 'uri'
 require 'timeout'
 
@@ -8,7 +9,7 @@ module LogStash
   module Inputs
     module Microsoft365Support
       class Auth
-        class Interrupted < StandardError; end
+        class Interrupted < Stopped; end
 
         Jars.load!
         java_import 'com.microsoft.aad.msal4j.ConfidentialClientApplication'

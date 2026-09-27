@@ -3,6 +3,7 @@
 require 'json'
 require 'time'
 require 'digest'
+require_relative 'errors'
 
 module LogStash
   module Inputs
@@ -10,6 +11,10 @@ module LogStash
       class HuntingCollector
         MAX_WINDOW = 3600
         MIN_SPLIT_SECONDS = 60
+        # Fields that change which rows a job returns or how they are identified. Scheduling and limit fields
+        # (interval, max_rows, initial_lookback) are excluded so editing them keeps the job's progress.
+        IDENTITY_FIELDS = %w[query mode timestamp_field identity_fields].freeze
+        CHECKPOINT_SUFFIXES = %w[last_run window pending_run].freeze
 
         def initialize(path:, http:, state:, emitter:, config:, stop:, clock: -> { Time.now.utc })
           @http, @state, @emitter, @config, @stop, @clock = http, state, emitter, config, stop, clock
@@ -27,8 +32,9 @@ module LogStash
 
         def run_once
           @jobs.each do |job|
-            raise 'Microsoft 365 collection stopped' if @stop.call
+            raise Stopped, 'Microsoft 365 collection stopped' if @stop.call
             key = checkpoint_key(job)
+            migrate_legacy_checkpoints(job, key)
             last_run = @state.checkpoint("#{key}:last_run")
             now = @clock.call.utc
             next if last_run && now - Time.iso8601(last_run) < job.fetch('interval', @config.fetch(:hunting_interval)).to_i
@@ -63,8 +69,21 @@ module LogStash
           end
         end
 
+        def signature(job)
+          Digest::SHA256.hexdigest(JSON.generate(IDENTITY_FIELDS.map { |field| [field, job[field]] }))
+        end
+
         def checkpoint_key(job)
-          "hunting:#{job.fetch('name')}:#{Digest::SHA256.hexdigest(JSON.generate(job))}"
+          "hunting:#{job.fetch('name')}:#{signature(job)}"
+        end
+
+        # Earlier releases keyed checkpoints on a hash of the whole job; carry that progress over once.
+        def migrate_legacy_checkpoints(job, key)
+          legacy = "hunting:#{job.fetch('name')}:#{Digest::SHA256.hexdigest(JSON.generate(job))}"
+          return if legacy == key || CHECKPOINT_SUFFIXES.any? { |suffix| @state.checkpoint("#{key}:#{suffix}") }
+
+          values = CHECKPOINT_SUFFIXES.to_h { |suffix| ["#{key}:#{suffix}", @state.checkpoint("#{legacy}:#{suffix}")] }.compact
+          @state.set_checkpoints(values) unless values.empty?
         end
 
         def snapshot(job, now)
@@ -112,7 +131,7 @@ module LogStash
             identity = row_identity(job, row, index)
             timestamp = row[job.fetch('timestamp_field')]
             raise "Hunting job #{job['name']} returned row without timestamp" unless timestamp
-            @emitter.emit(collector: "hunting.#{job['name']}", raw: row, identity: identity, timestamp: timestamp, revision: Digest::SHA256.hexdigest(JSON.generate(job)))
+            @emitter.emit(collector: "hunting.#{job['name']}", raw: row, identity: identity, timestamp: timestamp, revision: signature(job))
           end
         end
 
@@ -124,7 +143,7 @@ module LogStash
         end
 
         def query(text)
-          raise 'Microsoft 365 collection stopped' if @stop.call
+          raise Stopped, 'Microsoft 365 collection stopped' if @stop.call
           response = @http.post('graph', '/v1.0/security/runHuntingQuery', { 'query' => text })
           data = response.body
           raise 'Invalid Graph hunting response' unless data.is_a?(Hash) && data['results'].is_a?(Array)

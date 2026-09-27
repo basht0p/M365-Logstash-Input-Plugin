@@ -11,19 +11,36 @@ require 'logstash/inputs/microsoft365/emitter'
 require 'logstash/inputs/microsoft365/state'
 require 'logstash/inputs/microsoft365/http'
 
+RSpec.configure do |config|
+  # Volume specs take tens of seconds against real H2; CI runs them as a separate step.
+  config.filter_run_excluding volume: true unless ENV['M365_VOLUME']
+end
+
 class FakeState
-  attr_reader :checkpoints, :pending_blobs
+  attr_reader :checkpoints, :pending_blobs, :touches
 
   def initialize
     @checkpoints = {}
     @seen = {}
+    @touches = Hash.new(0)
     @pending_blobs = Hash.new { |h, k| h[k] = {} }
   end
 
   def checkpoint(name) = @checkpoints[name]
   def set_checkpoint(name, value) = @checkpoints[name] = value
-  def seen?(name, identity, version) = @seen.key?([name, identity, version])
+
+  def set_checkpoints(values)
+    values.each { |name, value| value.nil? ? @checkpoints.delete(name) : @checkpoints[name] = value.to_s }
+  end
+
+  def seen?(name, identity, version, touch: false)
+    found = @seen.key?([name, identity, version])
+    @touches[[name, identity]] += 1 if found && touch
+    found
+  end
+
   def mark_seen(name, identity, version) = @seen[[name, identity, version]] = true
+  def forget_seen = @seen.clear
   def add_pending(name, identity, value) = @pending_blobs[name][identity] = value
   def pending(name) = @pending_blobs[name].to_a
   def remove_pending_hash(name, identity) = @pending_blobs[name].delete(identity)

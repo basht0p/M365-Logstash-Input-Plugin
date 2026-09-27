@@ -4,13 +4,15 @@ require 'digest'
 require 'json'
 require 'time'
 require 'ipaddr'
+require_relative 'errors'
 
 module LogStash
   module Inputs
     module Microsoft365Support
-      class QueueStopped < StandardError; end
-
       class Emitter
+        # ISO 8601 date-time with no zone designator, as returned by the Management Activity API.
+        ZONELESS_TIMESTAMP = /\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?\z/.freeze
+
         def initialize(queue:, state:, tenant_id:, organization_id:, organization_name:, preserve_original: true, ecs_compatibility: 'v8', on_result: nil, decorate: nil, on_enqueue_start: nil, on_enqueue_commit: nil, on_enqueue_end: nil, event_factory:)
           @queue, @state, @tenant_id = queue, state, tenant_id
           @organization_id, @organization_name = organization_id, organization_name
@@ -19,11 +21,14 @@ module LogStash
           @on_enqueue_start, @on_enqueue_commit, @on_enqueue_end = on_enqueue_start, on_enqueue_commit, on_enqueue_end
         end
 
-        def emit(collector:, raw:, identity:, timestamp: nil, mutable: false, revision: nil)
+        # force: emit even if this version was already delivered (replay).
+        # refresh: on a duplicate, extend the dedupe entry's lifetime (full listings that keep returning it).
+        def emit(collector:, raw:, identity:, timestamp: nil, mutable: false, revision: nil, force: false, refresh: false)
           canonical = canonical_json(raw)
           version = mutable ? Digest::SHA256.hexdigest(canonical) : 'immutable'
           version = "#{revision}:#{version}" if revision
-          if @state.seen?(collector, identity, version)
+          timestamp = normalize_timestamp(timestamp)
+          if !force && @state.seen?(collector, identity, version, touch: refresh)
             @on_result&.call(collector, false, timestamp)
             return false
           end
@@ -66,6 +71,11 @@ module LogStash
         end
 
         private
+
+        # Microsoft documents these timestamps as UTC; without a designator they would parse as local time.
+        def normalize_timestamp(value)
+          value.is_a?(String) && value.match?(ZONELESS_TIMESTAMP) ? "#{value}Z" : value
+        end
 
         def canonical_json(value)
           JSON.generate(sort_hash(value))

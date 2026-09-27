@@ -11,11 +11,12 @@ The implementation targets Logstash 8.19 and 9.x, Microsoft 365 Management Activ
 | Area | Evidence/status |
 |---|---|
 | Logstash pipeline configuration | `config.test_and_exit` passed on official Logstash 8.19.22 and 9.5.4 Docker images. This validates configuration loading on these versions, not long-running API collection. |
-| Plugin Ruby specs | RSpec: 16/16 passed on both Logstash 8.19.22 and 9.5.4. |
-| Tenant helper tests | Pester: 17/17 passed on Windows PowerShell 7.6.5 and Linux PowerShell 7.4, and in GitHub Actions. Live provisioning against Microsoft Graph remains pending. |
+| Plugin Ruby specs | RSpec: 40/40 passed on both Logstash 8.19.22 and 9.5.4, covering window splitting, overlap sweeps and late arrivals, replay re-delivery, Activity source gaps and per-content-type isolation, dedupe refresh and age-based pruning, hunting checkpoint migration, and HTTP connection reuse and error details. |
+| High-volume spec | Passed on both versions against real H2 state: 146,401 sign-ins across a one-hour window that exceeds the page budget (split automatically), reconciliation and an overlap sweep with dedupe intact past 100,000 stored identities. First pass about 35 seconds. Simulated HTTP. |
+| Tenant helper tests | Pester: 17/17 passed on Windows PowerShell 7.6.5 and Linux PowerShell 7.4, and in GitHub Actions. PSScriptAnalyzer checks for assignments to automatic variables in CI. Live provisioning against Microsoft Graph remains pending. |
 | Gem packaging | Gem build, installation, and configuration validation passed on Logstash 8.19.22 and 9.5.4. GitHub Actions also created matching-version offline archives and installed them in fresh containers with networking disabled; `config.test_and_exit` passed without a source plugin path. |
 | Container/runtime availability | Official Logstash 8.19.22 and 9.5.4 images were used. The 9.5.4 image reports JRuby 10.0.6, Ruby 3.4.5, and JDK 21.0.12. |
-| Runtime harness | Passed on Logstash 8.19.22 and 9.5.4: Base/Event integration, H2 state locking/reopen, backpressure checkpoint delay, MSAL secret/PFX construction, mutable version IDs, and clean shutdown. HTTP was faked; no Microsoft tenant calls were made. |
+| Runtime harness | Passed on Logstash 8.19.22 and 9.5.4: Base/Event integration, H2 state locking/reopen, backpressure checkpoint delay, MSAL secret/PFX construction, mutable version IDs, clean shutdown, and rejection of an Activity `replay_from` older than seven days. HTTP was faked; no Microsoft tenant calls were made. |
 | Full-queue shutdown stress | Passed on both versions using actual Logstash Java memory and persistent queue writers. Stopping a blocked writer exits without advancing the source checkpoint or seen marker, including after H2 reopens. |
 | Commercial tenant smoke test | Not yet reported. |
 | GCC tenant smoke test | Not yet reported. |
