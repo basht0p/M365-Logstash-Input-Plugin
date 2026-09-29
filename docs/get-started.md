@@ -87,6 +87,34 @@ bin/logstash-plugin install file:///absolute/path/logstash-input-microsoft365-0.
 
 CI creates offline packs on Logstash 8.19.22 and 9.5.4, installs each in a fresh container of the same version with networking disabled, and runs `config.test_and_exit` there without a source plugin path. A pack only installs on the Logstash version it was prepared on, so build and prepare packs separately for each version. See [validation status](validation-status.md).
 
+## Container image
+
+Releases publish official Logstash images with the plugin installed to the GitHub Container Registry, one per supported Logstash version:
+
+```sh
+docker pull ghcr.io/basht0p/m365-logstash-input-plugin:0.1.0-logstash-9.5.4
+```
+
+Tags are `<plugin version>-logstash-<logstash version>`. `<plugin version>` alone points to the newest supported Logstash, and `latest` is added for stable (1.0 and later) releases. The images are the official Elastic images plus this plugin, so the usual Logstash image settings, environment variables, and mount points apply.
+
+To build one yourself from a checkout, choose the Logstash version with a build argument:
+
+```sh
+docker build --build-arg LOGSTASH_VERSION=9.5.4 -t logstash-microsoft365 .
+```
+
+Mount the pipeline at `/usr/share/logstash/pipeline/` and put `state_path` on a volume so checkpoints survive container replacement. A volume on `/usr/share/logstash/data` holds both the plugin state and a persistent queue:
+
+```sh
+docker run -d --name logstash-m365 \
+  -v "$PWD/pipeline:/usr/share/logstash/pipeline:ro" \
+  -v logstash-data:/usr/share/logstash/data \
+  -e M365_CLIENT_SECRET \
+  ghcr.io/basht0p/m365-logstash-input-plugin:0.1.0-logstash-9.5.4
+```
+
+with `state_path => "/usr/share/logstash/data/m365/example-org"` in the pipeline. Pass secrets through environment variables or a Logstash keystore rather than baking them into an image.
+
 ## Output fields
 
 With `ecs_compatibility => "v8"` (the default), events include `@timestamp`, `event.dataset`, `event.id`, `event.kind`, `event.action`, `event.provider`, and `event.created`. The plugin maps available organization, user, source IP, device, and outcome fields. Tenant identity and the source response are always available as `microsoft.tenant_id` and `microsoft.raw`; `preserve_original` separately controls the canonical JSON string under `event.original`. Every event includes `accounting.log.type: microsoft_365`.
