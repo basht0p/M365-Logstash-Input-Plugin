@@ -157,8 +157,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          docker run --rm --entrypoint /usr/share/logstash/bin/logstash-plugin m365-logstash:ci list --verbose logstash-input-microsoft365 \
-            | grep -Fx "logstash-input-microsoft365 (${{ steps.version.outputs.version }})"
+          # A local .gem is unpacked under vendor/local_gems and added to the Gemfile as a path gem,
+          # which `logstash-plugin list` doesn't report.
+          docker run --rm --entrypoint grep m365-logstash:ci '^gem "logstash-input-microsoft365"' /usr/share/logstash/Gemfile \
+            | tee /dev/stderr | grep -F "logstash-input-microsoft365-${{ steps.version.outputs.version }}"
           mkdir -p tmp
           cat > tmp/image.conf <<'PIPELINE'
           input {
