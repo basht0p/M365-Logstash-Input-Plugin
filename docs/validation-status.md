@@ -28,7 +28,7 @@ The implementation targets Logstash 8.19 and 9.x, Microsoft 365 Management Activ
 
 No Microsoft tenant credentials were used and no live cloud smoke tests have been run. The local runtime and helper tests used simulated HTTP/API calls.
 
-CI builds and tests matching-version offline archives on both Logstash versions, and uploads the gem and archives as workflow artifacts. The runtime harness has a timeout so a shutdown regression fails the job.
+CI builds and tests matching-version offline archives on both Logstash versions, and uploads the gem and archives as workflow artifacts. A `v*` tag publishes the same tested artifacts as a GitHub release; 0.x versions are marked as pre-releases. The runtime harness has a timeout so a shutdown regression fails the job.
 
 Endpoint constants or passing mocked tests do not establish live government-cloud service support. Do not describe an environment as verified until an authorized tenant smoke test has succeeded for the enabled sources.
 

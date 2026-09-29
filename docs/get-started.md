@@ -51,7 +51,9 @@ Configure plugin secrets with the Logstash keystore, for example `bin/logstash-k
 
 ## Build and install
 
-Building the gem vendors its Java dependencies. From the repository root, install a JDK 21 and Maven 3, make Ruby available, fetch the pinned Java dependencies into `vendor/jar-dependencies`, then build the gem:
+Tagged releases on the [releases page](https://github.com/basht0p/M365-Logstash-Input-Plugin/releases) include a ready-made offline pack for each supported Logstash version, named `logstash-input-microsoft365-<version>-logstash-<logstash version>-offline.zip`. Check it against `SHA256SUMS.txt`, then install the pack matching your Logstash version as described in [Prepare an offline installation pack](#prepare-an-offline-installation-pack). To build from source instead, follow the steps below.
+
+Building the gem vendors its Java dependencies. From the repository root, install a JDK 21 and Maven 3, make Ruby available, fetch the pinned Java dependencies into `vendor/jars`, then build the gem:
 
 ```sh
 mvn -B dependency:copy-dependencies
@@ -83,7 +85,7 @@ Copy the pack to a network-isolated host running the matching Logstash version a
 bin/logstash-plugin install file:///absolute/path/logstash-input-microsoft365-0.1.0.zip
 ```
 
-Offline pack creation and installation have been verified in a fresh Logstash 9.5.4 container with networking disabled, and `config.test_and_exit` passed there without a source plugin path. Offline installation has not yet been verified locally on 8.19.22; build and prepare packs separately for each supported Logstash version. See [validation status](validation-status.md).
+CI creates offline packs on Logstash 8.19.22 and 9.5.4, installs each in a fresh container of the same version with networking disabled, and runs `config.test_and_exit` there without a source plugin path. A pack only installs on the Logstash version it was prepared on, so build and prepare packs separately for each version. See [validation status](validation-status.md).
 
 ## Output fields
 
