@@ -74,6 +74,19 @@ Describe 'Resource and permission safety' {
         { Get-SetupResources $script:shared $script:selection } | Should -Throw '*does not advertise https://graph.microsoft.com*'
     }
 
+    It 'returns nothing when Graph lists no matching application or service principal' {
+        Mock Get-SetupGraphPages { return @() }
+        Mock Invoke-SetupGraph { }
+        Get-SetupApp '11111111-1111-1111-1111-111111111111' $script:shared | Should -BeNullOrEmpty
+        Get-SetupSp '11111111-1111-1111-1111-111111111111' $script:shared | Should -BeNullOrEmpty
+        Should -Invoke Invoke-SetupGraph -Times 0
+    }
+
+    It 'reports a missing application role when a resource principal lists no roles' {
+        Mock Get-SetupSp { return @{ id='graph-object'; appId='00000003-0000-0000-c000-000000000000'; servicePrincipalNames=@('00000003-0000-0000-c000-000000000000','https://graph.microsoft.com'); appRoles=$null } }
+        { Get-SetupResources $script:shared $script:selection } | Should -Throw '*unavailable or ambiguous*'
+    }
+
     It 'reads a single application to preserve existing certificate bytes' {
         Mock Get-SetupGraphPages { return @(@{ id='client-object'; appId='11111111-1111-1111-1111-111111111111'; keyCredentials=@(@{ key=$null }) }) }
         Mock Invoke-SetupGraph { return @{ id='client-object'; appId='11111111-1111-1111-1111-111111111111'; keyCredentials=@(@{ key='public-cert-bytes' }) } }

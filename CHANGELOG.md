@@ -5,6 +5,7 @@
 - `Dockerfile` that builds an official Logstash image with the plugin installed from source.
 - Releases push a tested image per supported Logstash version to `ghcr.io/basht0p/m365-logstash-input-plugin` and list the images in the release notes.
 - A re-run release for an existing tag no longer replaces the release's files.
+- `Initialize-M365LogstashTenant.ps1` no longer fails with "The property 'appId' cannot be found" when an application or service principal doesn't exist yet in the tenant, so it can go on to create it.
 
 ## [0.1.0]
 
