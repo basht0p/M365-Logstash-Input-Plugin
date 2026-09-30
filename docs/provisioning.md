@@ -55,6 +55,8 @@ After the application exists, use the generated manifest to resume and grant con
 
 The app can instead be selected explicitly with `-ExistingApplicationId`. Do not choose an existing app by display name alone. Each phase independently derives its permission set from the supplied switches, so repeat the same `-Collectors`, content type, beta, and optional permission flags used in the provisioning phase when you run `Consent` or `Validate`. The phases are `Plan`, `Provision`, `Consent`, `Validate`, and `All` (default). `-WhatIf` only produces a local plan; it does not create app objects or grant consent.
 
+Newly granted application roles can take several minutes to appear in app-only tokens. `Validate` (and `All`, which runs it straight after `Consent`) reads the roles in each token and waits up to about five minutes for the ones it needs. If they still haven't arrived, it stops and names the missing role; confirm admin consent for the application in Entra and re-run with `-Phase Validate` later. A failed API check reports the service's error code, for example `AF10001` when the Activity API receives a token without `ActivityFeed.Read`.
+
 ## Credentials and generated files
 
 Certificate authentication is the default. Certificate creation is explicit: `-GenerateCertificate` creates a certificate and PFX in the output directory, optionally protected by `-CertificatePassword` (a `SecureString`). Protect the output directory and transfer the private PFX only to the Logstash host. The public certificate is what is registered on the app. An existing certificate can be supplied with `-CertificatePath`; `-CertificatePfxPath` may be supplied for validation where needed.

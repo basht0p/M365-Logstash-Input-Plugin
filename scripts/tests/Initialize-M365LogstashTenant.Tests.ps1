@@ -5,6 +5,13 @@ BeforeAll {
     . $script:helper -TenantId '11111111-1111-1111-1111-111111111111' -Cloud commercial -Phase Provision -OutputDirectory $TestDrive
     $script:shared = Get-SetupManifest
     $script:selection = Get-SetupSelection $script:shared
+    function New-TestToken([string[]]$Roles) {
+        $encode = { param($value) [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($value | ConvertTo-Json -Compress))).TrimEnd('=').Replace('+','-').Replace('/','_') }
+        return "$(& $encode @{ alg='none' }).$(& $encode @{ roles=@($Roles) }).signature"
+    }
+    $script:activityToken = New-TestToken @('ActivityFeed.Read')
+    $script:graphToken = New-TestToken @('AuditLog.Read.All')
+    $script:emptyToken = New-TestToken @()
 }
 
 Describe 'Local planning and input validation' {
@@ -224,7 +231,7 @@ Describe 'Recovery and app-only validation' {
         $script:activityCalls = @()
         $chosen = @{ collectors=@('activity'); permissions=@{ graph=[Collections.Generic.HashSet[string]]::new(); activity=[Collections.Generic.HashSet[string]]::new() }; activity_content_types=@('Audit.Exchange') }
         [void]$chosen.permissions.activity.Add('ActivityFeed.Read')
-        Mock Get-SetupAppToken { return 'fake-token' }
+        Mock Get-SetupAppToken { return $script:activityToken }
         Mock Invoke-SetupProbe {
             param($Method,$Uri,$Token,$Body)
             $script:activityCalls += "$Method $Uri"
@@ -239,10 +246,40 @@ Describe 'Recovery and app-only validation' {
     It 'validates a Graph-only collector without requesting Activity access' {
         $chosen = @{ collectors=@('signin'); permissions=@{ graph=[Collections.Generic.HashSet[string]]::new(); activity=[Collections.Generic.HashSet[string]]::new() }; activity_content_types=@() }
         [void]$chosen.permissions.graph.Add('AuditLog.Read.All')
-        Mock Get-SetupAppToken { return 'fake-token' }
+        Mock Get-SetupAppToken { return $script:graphToken }
         Mock Invoke-SetupProbe { return @{ value=@() } }
         $result = Test-SetupAccess '22222222-2222-2222-2222-222222222222' $script:shared $chosen $null $null $null
         $result.signin | Should -Be 'authorized; no records returned'
         Should -Invoke Get-SetupAppToken -Times 1 -ParameterFilter { $Audience -eq 'https://graph.microsoft.com' }
+    }
+
+    It 'waits for newly consented roles to reach the app-only token' {
+        $script:tokenCalls = 0
+        Mock Get-SetupAppToken { $script:tokenCalls++; if ($script:tokenCalls -lt 3) { return $script:emptyToken } else { return $script:activityToken } }
+        Mock Start-Sleep { }
+        Mock Write-Warning { }
+        $token = Get-SetupRoleToken '22222222-2222-2222-2222-222222222222' 'https://manage.office.com' @('ActivityFeed.Read') $script:shared $null $null $null
+        $token | Should -Be $script:activityToken
+        Should -Invoke Start-Sleep -Times 2
+    }
+
+    It 'stops waiting and names the missing role when consent never reaches the token' {
+        Mock Get-SetupAppToken { return $script:emptyToken }
+        Mock Start-Sleep { }
+        Mock Write-Warning { }
+        { Get-SetupRoleToken '22222222-2222-2222-2222-222222222222' 'https://manage.office.com' @('ActivityFeed.Read') $script:shared $null $null $null } |
+            Should -Throw '*still lacks ActivityFeed.Read*-Phase Validate*'
+        Should -Invoke Start-Sleep -Times 6
+    }
+
+    It 'includes the API error code in a failed probe' {
+        Mock Invoke-RestMethod {
+            $exception = [Microsoft.PowerShell.Commands.HttpResponseException]::new('Unauthorized', [System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]::Unauthorized))
+            $record = [System.Management.Automation.ErrorRecord]::new($exception, 'WebCmdletWebResponseException', 'InvalidOperation', $null)
+            $record.ErrorDetails = [System.Management.Automation.ErrorDetails]::new('{"error":{"code":"AF10001","message":"The permission set () sent in the request does not include the expected permission."}}')
+            throw $record
+        }
+        { Invoke-SetupProbe GET 'https://manage.office.com/api/v1.0/tenant/activity/feed/subscriptions/list' 'token' $null } |
+            Should -Throw '*HTTP 401*AF10001: The permission set ()*'
     }
 }

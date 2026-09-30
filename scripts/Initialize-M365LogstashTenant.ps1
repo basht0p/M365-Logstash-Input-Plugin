@@ -409,13 +409,45 @@ function Get-SetupAppToken($AppId, $Audience, $Manifest, [SecureString]$Secret, 
     }
 }
 
+function Get-SetupTokenRoles([string]$Token) {
+    $parts = $Token.Split('.')
+    if ($parts.Count -ne 3) { return @() }
+    $payload = $parts[1].Replace('-', '+').Replace('_', '/')
+    $payload = $payload.PadRight($payload.Length + ((4 - $payload.Length % 4) % 4), '=')
+    $claims = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($payload)) | ConvertFrom-Json -AsHashtable
+    return @($claims['roles'] | Where-Object { $null -ne $_ })
+}
+
+# Application roles granted during Consent can take several minutes to appear in new app-only tokens,
+# and the APIs reject tokens without them (the Activity API with HTTP 401, AF10001).
+function Get-SetupRoleToken($AppId, $Audience, [string[]]$Roles, $Manifest, [SecureString]$Secret, $PfxPath, [SecureString]$PfxPassword) {
+    $waits = @(15, 30, 45, 60, 60, 90)
+    for ($attempt = 0; ; $attempt++) {
+        $token = Get-SetupAppToken $AppId $Audience $Manifest $Secret $PfxPath $PfxPassword
+        $granted = @(Get-SetupTokenRoles $token)
+        $missing = @($Roles | Where-Object { $granted -notcontains $_ })
+        if ($missing.Count -eq 0) { return $token }
+        if ($attempt -ge $waits.Count) {
+            throw "App-only token for $Audience still lacks $($missing -join ', ') after about five minutes. Confirm admin consent for the application in Entra, then re-run with -Phase Validate."
+        }
+        Write-Warning "App-only token for $Audience does not include $($missing -join ', ') yet; new consent can take several minutes to reach tokens. Retrying in $($waits[$attempt]) seconds."
+        Start-Sleep -Seconds $waits[$attempt]
+    }
+}
+
 function Invoke-SetupProbe($Method, $Uri, $Token, $Body) {
     $params = @{ Method = $Method; Uri = $Uri; Headers = @{ Authorization = "Bearer $Token" }; TimeoutSec = 30; ErrorAction = 'Stop' }
     if ($null -ne $Body) { $params.Body = ($Body | ConvertTo-Json -Depth 20 -Compress); $params.ContentType = 'application/json' }
     try { return ConvertTo-SetupData (Invoke-RestMethod @params) }
     catch {
         $status = [int]$_.Exception.Response.StatusCode
-        throw "Probe failed with HTTP $status at $(([uri]$Uri).AbsolutePath). Check application role, license, endpoint availability or query."
+        $detail = ''
+        try {
+            $apiError = (ConvertFrom-Json $_.ErrorDetails.Message -AsHashtable)['error']
+            if ($apiError -is [System.Collections.IDictionary]) { $detail = " $($apiError['code']): $($apiError['message'])" }
+            elseif ($apiError) { $detail = " $apiError" }
+        } catch { $detail = '' }
+        throw "Probe failed with HTTP $status at $(([uri]$Uri).AbsolutePath).$detail Check application role, license, endpoint availability or query."
     }
 }
 
@@ -426,7 +458,7 @@ function Test-SetupAccess($AppId, $Manifest, $Selection, [SecureString]$Secret, 
     foreach ($resource in @('graph','activity')) {
         if ($Selection.permissions[$resource].Count -gt 0) {
             $audience = if ($resource -eq 'graph') { $cloudSpec.graph_base_url } else { $cloudSpec.activity_base_url }
-            $tokens[$resource] = Get-SetupAppToken $AppId $audience $Manifest $Secret $PfxPath $PfxPassword
+            $tokens[$resource] = Get-SetupRoleToken $AppId $audience @($Selection.permissions[$resource]) $Manifest $Secret $PfxPath $PfxPassword
         }
     }
     if ($tokens.ContainsKey('activity')) {
