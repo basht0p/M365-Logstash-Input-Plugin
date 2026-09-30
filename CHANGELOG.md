@@ -6,6 +6,7 @@
 - Releases push a tested image per supported Logstash version to `ghcr.io/basht0p/m365-logstash-input-plugin` and list the images in the release notes.
 - A re-run release for an existing tag no longer replaces the release's files.
 - `Initialize-M365LogstashTenant.ps1` no longer fails with "The property 'appId' cannot be found" when an application or service principal doesn't exist yet in the tenant, so it can go on to create it.
+- The tenant helper's `Validate` phase waits for newly consented roles to reach the app-only token instead of failing with HTTP 401 right after consent, and failed API checks include the service's error code and message.
 
 ## [0.1.0]
 
