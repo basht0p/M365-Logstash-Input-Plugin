@@ -170,7 +170,8 @@ function Get-SetupGraphPages($Path, $Manifest) {
 }
 
 function Get-SetupUniqueByAppId($Collection, $AppId, $Kind) {
-    $found = @($Collection | Where-Object { $_.appId -eq $AppId })
+    # An empty Graph listing arrives as $null, which a pipeline still passes through once.
+    $found = @($Collection | Where-Object { $null -ne $_ -and $_.appId -eq $AppId })
     if ($found.Count -gt 1) { throw "Multiple $Kind objects have appId $AppId." }
     if ($found.Count -eq 0) { return $null }
     return $found[0]
@@ -214,7 +215,7 @@ function Get-SetupResources($Manifest, $Selection, [bool]$AllowCreate = $false) 
         }
         $roles = @{}
         foreach ($permission in $Selection.permissions[$resource]) {
-            $candidates = @($sp.appRoles | Where-Object { $_.value -eq $permission -and $_.isEnabled -eq $true -and @($_.allowedMemberTypes) -contains 'Application' })
+            $candidates = @($sp.appRoles | Where-Object { $null -ne $_ -and $_.value -eq $permission -and $_.isEnabled -eq $true -and @($_.allowedMemberTypes) -contains 'Application' })
             if ($candidates.Count -ne 1) { throw "Microsoft $resource application role '$permission' is unavailable or ambiguous in $Cloud." }
             $roles[$permission] = $candidates[0].id
         }
