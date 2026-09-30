@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+- `Dockerfile` that builds an official Logstash image with the plugin installed from source.
+- Releases push a tested image per supported Logstash version to `ghcr.io/basht0p/m365-logstash-input-plugin` and list the images in the release notes.
+- A re-run release for an existing tag no longer replaces the release's files.
+
 ## [0.1.0]
 
 First pre-release. It hasn't been validated against a live Microsoft tenant; see [validation status](docs/validation-status.md) before deploying it. Each release carries one offline pack per supported Logstash version (`logstash-input-microsoft365-<version>-logstash-<logstash version>-offline.zip`), the plugin gem, and `SHA256SUMS.txt`. Install the pack that matches your Logstash version with `bin/logstash-plugin install file:///absolute/path/<pack>.zip`.

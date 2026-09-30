@@ -1,0 +1,7 @@
+*
+!pom.xml
+!logstash-input-microsoft365.gemspec
+!lib/
+!data/
+!LICENSE
+!README.md
