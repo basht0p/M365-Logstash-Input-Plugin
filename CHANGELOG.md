@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.1.1]
 
 - `Dockerfile` that builds an official Logstash image with the plugin installed from source.
 - Releases push a tested image per supported Logstash version to `ghcr.io/basht0p/m365-logstash-input-plugin` and list the images in the release notes.

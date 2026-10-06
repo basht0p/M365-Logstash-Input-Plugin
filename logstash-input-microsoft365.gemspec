@@ -1,6 +1,6 @@
 Gem::Specification.new do |s|
   s.name = 'logstash-input-microsoft365'
-  s.version = '0.1.0'
+  s.version = '0.1.1'
   s.licenses = ['Apache-2.0']
   s.summary = 'Microsoft 365 REST activity and security input for Logstash'
   s.description = 'Collects Microsoft 365 activity, Entra, Defender, Identity Protection, and hunting events.'

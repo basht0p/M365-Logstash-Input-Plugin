@@ -8,7 +8,7 @@
 
 [![CI](https://github.com/basht0p/M365-Logstash-Input-Plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/basht0p/M365-Logstash-Input-Plugin/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.1.0-informational.svg)](logstash-input-microsoft365.gemspec)
+[![Version](https://img.shields.io/badge/version-0.1.1-informational.svg)](logstash-input-microsoft365.gemspec)
 [![Status](https://img.shields.io/badge/status-pre--release-orange.svg)](docs/validation-status.md)
 
 [![Logstash 8.19](https://img.shields.io/badge/Logstash-8.19-005571?logo=logstash&logoColor=white)](https://www.elastic.co/logstash)
@@ -87,13 +87,13 @@ Run with `-WhatIf` first to preview, then run the `Provision` and consent phases
 ```sh
 mvn -B dependency:copy-dependencies
 gem build logstash-input-microsoft365.gemspec
-bin/logstash-plugin install --no-verify logstash-input-microsoft365-0.1.0.gem
+bin/logstash-plugin install --no-verify logstash-input-microsoft365-0.1.1.gem
 ```
 
 Or use a prebuilt container image, which is the official Logstash image with the plugin installed:
 
 ```sh
-docker pull ghcr.io/basht0p/m365-logstash-input-plugin:0.1.0-logstash-9.5.4
+docker pull ghcr.io/basht0p/m365-logstash-input-plugin:0.1.1-logstash-9.5.4
 ```
 
 See [container image](docs/get-started.md#container-image) for tags, volumes, and building your own with the included `Dockerfile`.
