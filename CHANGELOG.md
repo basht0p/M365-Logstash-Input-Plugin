@@ -7,6 +7,7 @@
 - A re-run release for an existing tag no longer replaces the release's files.
 - `Initialize-M365LogstashTenant.ps1` no longer fails with "The property 'appId' cannot be found" when an application or service principal doesn't exist yet in the tenant, so it can go on to create it.
 - The tenant helper's `Validate` phase waits for newly consented roles to reach the app-only token instead of failing with HTTP 401 right after consent, and failed API checks include the service's error code and message.
+- The `defender_incident` collector requests 50 incidents per page, the most `/security/incidents` allows, instead of failing every run with HTTP 400 ("The limit of '50' for Top query has been exceeded").
 
 ## [0.1.0]
 
