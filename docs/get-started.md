@@ -63,7 +63,7 @@ gem build logstash-input-microsoft365.gemspec
 Install the resulting gem into the Logstash distribution you will run:
 
 ```sh
-bin/logstash-plugin install --no-verify /path/to/logstash-input-microsoft365-0.1.0.gem
+bin/logstash-plugin install --no-verify /path/to/logstash-input-microsoft365-0.1.1.gem
 ```
 
 The repository build and plugin configuration have passed on Logstash 8.19.22 and 9.5.4; see [validation status](validation-status.md). Use `--no-verify` only for an artifact you have built or obtained through your trusted release process.
@@ -75,14 +75,14 @@ On a machine with the target Logstash version and network access, first install 
 ```sh
 mkdir -p pkg
 bin/logstash-plugin prepare-offline-pack \
-  --output "$PWD/pkg/logstash-input-microsoft365-0.1.0.zip" \
+  --output "$PWD/pkg/logstash-input-microsoft365-0.1.1.zip" \
   logstash-input-microsoft365
 ```
 
 Copy the pack to a network-isolated host running the matching Logstash version and install it from a file URL:
 
 ```sh
-bin/logstash-plugin install file:///absolute/path/logstash-input-microsoft365-0.1.0.zip
+bin/logstash-plugin install file:///absolute/path/logstash-input-microsoft365-0.1.1.zip
 ```
 
 CI creates offline packs on Logstash 8.19.22 and 9.5.4, installs each in a fresh container of the same version with networking disabled, and runs `config.test_and_exit` there without a source plugin path. A pack only installs on the Logstash version it was prepared on, so build and prepare packs separately for each version. See [validation status](validation-status.md).
@@ -92,7 +92,7 @@ CI creates offline packs on Logstash 8.19.22 and 9.5.4, installs each in a fresh
 Releases publish official Logstash images with the plugin installed to the GitHub Container Registry, one per supported Logstash version:
 
 ```sh
-docker pull ghcr.io/basht0p/m365-logstash-input-plugin:0.1.0-logstash-9.5.4
+docker pull ghcr.io/basht0p/m365-logstash-input-plugin:0.1.1-logstash-9.5.4
 ```
 
 Tags are `<plugin version>-logstash-<logstash version>`. `<plugin version>` alone points to the newest supported Logstash, and `latest` is added for stable (1.0 and later) releases. The images are the official Elastic images plus this plugin, so the usual Logstash image settings, environment variables, and mount points apply.
@@ -110,7 +110,7 @@ docker run -d --name logstash-m365 \
   -v "$PWD/pipeline:/usr/share/logstash/pipeline:ro" \
   -v logstash-data:/usr/share/logstash/data \
   -e M365_CLIENT_SECRET \
-  ghcr.io/basht0p/m365-logstash-input-plugin:0.1.0-logstash-9.5.4
+  ghcr.io/basht0p/m365-logstash-input-plugin:0.1.1-logstash-9.5.4
 ```
 
 with `state_path => "/usr/share/logstash/data/m365/example-org"` in the pipeline. Pass secrets through environment variables or a Logstash keystore rather than baking them into an image.

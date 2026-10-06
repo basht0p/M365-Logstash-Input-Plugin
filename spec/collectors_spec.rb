@@ -120,6 +120,13 @@ RSpec.describe 'Microsoft 365 collectors' do
     expect(http.calls.first[2]).to include('%24top=500')
   end
 
+  it 'requests Defender incidents within the Graph page size limit of 50' do
+    http = FakeHTTP.new { |_method, _resource, _url, _body| response({ 'value' => [] }) }
+    collector = LogStash::Inputs::Microsoft365Support::GraphCollector.new(name: 'defender_incident', http: http, state: state, emitter: output, config: config, stop: -> { false }, clock: -> { now })
+    collector.run_once
+    expect(URI.decode_www_form(URI.parse(http.calls.first[2]).query).to_h['$top']).to eq('50')
+  end
+
   it 'replay_from re-delivers Graph records that were already delivered' do
     http = FakeHTTP.new { |_method, _resource, _url, _body| response({ 'value' => [{ 'id' => 'a', 'createdDateTime' => (now - 600).iso8601 }] }) }
     collector = LogStash::Inputs::Microsoft365Support::GraphCollector.new(name: 'signin', http: http, state: state, emitter: output, config: config, stop: -> { false }, clock: -> { now })
