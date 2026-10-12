@@ -61,9 +61,11 @@ Newly granted application roles can take several minutes to appear in app-only t
 
 Certificate authentication is the default. Certificate creation is explicit: `-GenerateCertificate` creates a certificate and PFX in the output directory, optionally protected by `-CertificatePassword` (a `SecureString`). Protect the output directory and transfer the private PFX only to the Logstash host. The public certificate is what is registered on the app. An existing certificate can be supplied with `-CertificatePath`; `-CertificatePfxPath` may be supplied for validation where needed.
 
-Secret authentication is optional. Supply `-Authentication Secret` and a `-ClientSecret` `SecureString` when validating an existing secret-based app. Secret artifacts are sensitive; keep them out of source control and use the generated credential import instructions to place values in the Logstash keystore.
+Secret authentication is optional. Supply `-Authentication Secret` and a `-ClientSecret` `SecureString` when validating an existing secret-based app. Secret artifacts are sensitive; keep them out of source control and follow the `next_steps` in `provisioning_result.json` to place values in the Logstash keystore.
 
-The helper writes `tenant-manifest.json` (resume state), `microsoft365.conf` (tenant-specific input block), `provisioning-report.json`, and `credential-import.txt`. Certificate runs can additionally write `m365-logstash-certificate.cer` and `.pfx`; secret mode can write `m365-logstash-client-secret.txt`. Treat credential-bearing output as a secret even if the helper protects file permissions.
+Every phase except `Plan` records its outcome in `provisioning_result.json` and prints only that file's path. The file holds the tenant, cloud, application and service principal IDs, phase, collectors, requested permissions, the roles consented in this run, validation results, credential expiry, the paths of the other generated files, and the credential import steps. It never contains a secret or private key, so it is safe to attach to a change record.
+
+The helper also writes `tenant-manifest.json` (resume state) and `microsoft365.conf` (tenant-specific input block). Certificate runs can additionally write `m365-logstash-certificate.cer` and `.pfx`; secret mode can write `m365-logstash-client-secret.txt`. Treat credential-bearing output as a secret even if the helper protects file permissions.
 
 ## Collector options
 

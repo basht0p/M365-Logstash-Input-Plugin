@@ -194,10 +194,46 @@ Describe 'Recovery and app-only validation' {
         (Get-Content (Join-Path $folder 'tenant-manifest.json') -Raw | ConvertFrom-Json).application_id | Should -Be '22222222-2222-2222-2222-222222222222'
         $script:spFails = $false
         $result = Invoke-SetupMain
-        $result.application_id | Should -Be '22222222-2222-2222-2222-222222222222'
+        (Get-Content $result -Raw | ConvertFrom-Json).application_id | Should -Be '22222222-2222-2222-2222-222222222222'
         $script:appPosts | Should -Be 1
         (Get-Content (Join-Path $folder 'microsoft365.conf') -Raw) | Should -Not -Match 'one-time-test-secret'
         Test-Path (Join-Path $folder 'm365-logstash-client-secret.txt') | Should -BeTrue
+    }
+
+    It 'records the whole run in provisioning_result.json and returns only its path' {
+        $folder = Join-Path $TestDrive ([guid]::NewGuid().ToString())
+        . $script:helper -TenantId '11111111-1111-1111-1111-111111111111' -Cloud commercial -Phase All -Authentication Secret -Collectors signin -OutputDirectory $folder
+        Mock Assert-SetupContext { }
+        Mock Get-SetupResources { return @{ graph = @{ sp=@{ id='graph-object' }; roles=@{ 'AuditLog.Read.All'='audit-role' } } } }
+        Mock Get-SetupApp { return $null }
+        Mock Get-SetupSp { return $null }
+        Mock Get-SetupGraphPages { return @() }
+        Mock Invoke-SetupGraph {
+            param($Method,$Path,$Body,$Manifest)
+            if ($Path -eq '/applications') { return @{ id='client-object'; appId='22222222-2222-2222-2222-222222222222'; signInAudience='AzureADMyOrg'; requiredResourceAccess=@(); keyCredentials=@(); passwordCredentials=@() } }
+            if ($Path -eq '/servicePrincipals') { return @{ id='client-sp'; appId='22222222-2222-2222-2222-222222222222' } }
+            if ($Path -like '*/addPassword') { return @{ secretText='one-time-test-secret' } }
+            return @{}
+        }
+        Mock Test-SetupAccess { return [ordered]@{ signin = 'authorized; records returned' } }
+        $output = @(Invoke-SetupMain)
+        $output | Should -Be @((Join-Path $folder 'provisioning_result.json'))
+        $raw = Get-Content $output[0] -Raw
+        $raw | Should -Not -Match 'one-time-test-secret'
+        $result = $raw | ConvertFrom-Json -AsHashtable
+        $result.phase | Should -Be 'All'
+        $result.application_id | Should -Be '22222222-2222-2222-2222-222222222222'
+        $result.service_principal_object_id | Should -Be 'client-sp'
+        $result.collectors | Should -Be @('signin')
+        $result.resource_permissions.graph | Should -Be @('AuditLog.Read.All')
+        $result.consented_roles | Should -Be @('graph/AuditLog.Read.All')
+        $result.validation.signin | Should -Be 'authorized; records returned'
+        $result.credential_expiry_utc | Should -Not -BeNullOrEmpty
+        $result.artifacts.config | Should -Be (Join-Path $folder 'microsoft365.conf')
+        $result.artifacts.client_secret | Should -Be (Join-Path $folder 'm365-logstash-client-secret.txt')
+        $result.next_steps | Should -Not -BeNullOrEmpty
+        Test-Path (Join-Path $folder 'provisioning-report.json') | Should -BeFalse
+        Test-Path (Join-Path $folder 'credential-import.txt') | Should -BeFalse
     }
 
     It 'signs a certificate assertion and requests an Activity resource token' {
