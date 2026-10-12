@@ -6,7 +6,8 @@ Creates one tenant-owned application and service principal for the microsoft365 
 Plan and -WhatIf perform local planning only. Provision creates or resumes an application,
 service principal, permissions and a certificate (or a protected one-time secret). Consent
 assigns application roles; Validate tests app-only access and starts missing Activity feeds.
-No tenant-wide audit or licensing settings are changed.
+Every phase except Plan records its outcome in provisioning_result.json in the output directory
+and prints that file's path. No tenant-wide audit or licensing settings are changed.
 #>
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
 param(
@@ -495,10 +496,10 @@ function Test-SetupAccess($AppId, $Manifest, $Selection, [SecureString]$Secret, 
     return $result
 }
 
-function Write-SetupArtifacts($App, $ClientSp, $Resources, $Selection, $CredentialInfo, $Validation, $OutputPath) {
+function Write-SetupArtifacts($App, $ClientSp, $Resources, $Selection, $CredentialInfo, $Consented, $Validation, $OutputPath) {
     $manifestPath = Join-Path $OutputPath 'tenant-manifest.json'
     $configPath = Join-Path $OutputPath 'microsoft365.conf'
-    $reportPath = Join-Path $OutputPath 'provisioning-report.json'
+    $resultPath = Join-Path $OutputPath 'provisioning_result.json'
     $values = [ordered]@{
         schema_version = 1; tenant_id = $TenantId; cloud = $Cloud; application_id = $App.appId
         application_object_id = $App.id; service_principal_object_id = $ClientSp.id
@@ -512,13 +513,11 @@ function Write-SetupArtifacts($App, $ClientSp, $Resources, $Selection, $Credenti
         try { $certificateExpiry = $certificate.NotAfter.ToUniversalTime().ToString('o') }
         finally { $certificate.Dispose() }
     }
-    $report = [ordered]@{
-        tenant_id = $TenantId; cloud = $Cloud; application_id = $App.appId
-        resource_permissions = [ordered]@{ graph = @($Selection.permissions.graph | Sort-Object); activity = @($Selection.permissions.activity | Sort-Object) }
-        validation = $Validation; generated_utc = [DateTime]::UtcNow.ToString('o')
-        credential_expiry_utc = if ($certificateExpiry) { $certificateExpiry } else { $CredentialInfo.secret_expiry_utc }
-        note = 'Secrets and private keys are omitted. No tenant-wide auditing or license setting was changed.'
-    }
+    $artifacts = [ordered]@{ manifest = $manifestPath; config = $configPath }
+    if ($CredentialInfo.certificate_path) { $artifacts.certificate = $CredentialInfo.certificate_path }
+    if ($CredentialInfo.pfx_path) { $artifacts.certificate_pfx = $CredentialInfo.pfx_path }
+    $secretPath = Join-Path $OutputPath 'm365-logstash-client-secret.txt'
+    if ([IO.File]::Exists($secretPath)) { $artifacts.client_secret = $secretPath }
     $quotedCollectors = ($Selection.collectors | ForEach-Object { '"' + $_ + '"' }) -join ', '
     $quotedContent = ($Selection.activity_content_types | ForEach-Object { ConvertTo-SetupLogstashString $_ }) -join ', '
     $quotedSignins = ($SigninTypes | ForEach-Object { ConvertTo-SetupLogstashString $_ }) -join ', '
@@ -544,11 +543,22 @@ function Write-SetupArtifacts($App, $ClientSp, $Resources, $Selection, $Credenti
         'Replace the generated certificate path with the deployed PFX path before starting Logstash.',
         'Run one input block per tenant and configure a persistent queue for durable delivery.'
     )
+    # Everything a run reports goes in one file; secrets and private keys stay in their own protected files.
+    $result = [ordered]@{
+        schema_version = 1; generated_utc = [DateTime]::UtcNow.ToString('o'); phase = $Phase
+        tenant_id = $TenantId; cloud = $Cloud; application_id = $App.appId
+        application_object_id = $App.id; service_principal_object_id = $ClientSp.id
+        collectors = $Selection.collectors; authentication = $Authentication
+        credential_expiry_utc = if ($certificateExpiry) { $certificateExpiry } else { $CredentialInfo.secret_expiry_utc }
+        resource_permissions = [ordered]@{ graph = @($Selection.permissions.graph | Sort-Object); activity = @($Selection.permissions.activity | Sort-Object) }
+        consented_roles = @($Consented); validation = $Validation
+        artifacts = $artifacts; next_steps = $instructions
+        note = 'Secrets and private keys are omitted. No tenant-wide auditing or license setting was changed.'
+    }
     [IO.File]::WriteAllText($manifestPath, ($values | ConvertTo-Json -Depth 20))
-    [IO.File]::WriteAllText($reportPath, ($report | ConvertTo-Json -Depth 20))
     [IO.File]::WriteAllLines($configPath, $lines)
-    [IO.File]::WriteAllLines((Join-Path $OutputPath 'credential-import.txt'), $instructions)
-    return @{ manifest = $manifestPath; report = $reportPath; config = $configPath }
+    [IO.File]::WriteAllText($resultPath, ($result | ConvertTo-Json -Depth 20))
+    return $resultPath
 }
 
 function ConvertTo-SetupLogstashString([string]$Value) {
@@ -654,8 +664,7 @@ function Invoke-SetupMain {
         $validation = Test-SetupAccess $appId $manifest $selection $secretForValidation $credentialInfo.pfx_path $CertificatePassword
     }
     Assert-SetupPrivateDirectory $OutputDirectory
-    $artifacts = Write-SetupArtifacts $app $clientSp $resources $selection $credentialInfo $validation $OutputDirectory
-    return [ordered]@{ tenant_id = $TenantId; cloud = $Cloud; application_id = $appId; consented_roles = $consented; validation = $validation; artifacts = $artifacts }
+    return Write-SetupArtifacts $app $clientSp $resources $selection $credentialInfo $consented $validation $OutputDirectory
 }
 
 if ($MyInvocation.InvocationName -ne '.') {

@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- `Initialize-M365LogstashTenant.ps1` records each run in a single `provisioning_result.json` (IDs, permissions, consented roles, validation results, credential expiry, generated file paths, and credential import steps) and prints only that file's path instead of a nested table. It replaces `provisioning-report.json` and `credential-import.txt`.
+
 ## [0.1.1]
 
 - `Dockerfile` that builds an official Logstash image with the plugin installed from source.
