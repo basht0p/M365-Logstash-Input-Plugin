@@ -89,13 +89,13 @@ CI creates offline packs on Logstash 8.19.22 and 9.5.4, installs each in a fresh
 
 ## Container image
 
-Releases publish official Logstash images with the plugin installed to the GitHub Container Registry, one per supported Logstash version:
+Releases publish official Logstash OSS images with the plugin installed to the GitHub Container Registry, one per supported Logstash version:
 
 ```sh
 docker pull ghcr.io/basht0p/m365-logstash-input-plugin:0.1.1-logstash-9.5.4
 ```
 
-Tags are `<plugin version>-logstash-<logstash version>`. `<plugin version>` alone points to the newest supported Logstash, and `latest` is added for stable (1.0 and later) releases. The images are the official Elastic images plus this plugin, so the usual Logstash image settings, environment variables, and mount points apply.
+Tags are `<plugin version>-logstash-<logstash version>`. `<plugin version>` alone points to the newest supported Logstash, and `latest` is added for stable (1.0 and later) releases. The images are Elastic's `logstash-oss` images plus this plugin, so the usual Logstash image settings, environment variables, and mount points apply. The OSS distribution leaves out X-Pack and the Elastic-licensed plugins, so `xpack.*` settings (monitoring, central management) and the `elastic_integration` filter aren't available. If a pipeline needs them, install the [offline pack](#prepare-an-offline-installation-pack) on the default Logstash distribution instead.
 
 To build one yourself from a checkout, choose the Logstash version with a build argument:
 

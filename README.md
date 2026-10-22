@@ -90,7 +90,7 @@ gem build logstash-input-microsoft365.gemspec
 bin/logstash-plugin install --no-verify logstash-input-microsoft365-0.1.1.gem
 ```
 
-Or use a prebuilt container image, which is the official Logstash image with the plugin installed:
+Or use a prebuilt container image, which is the official Logstash OSS image with the plugin installed:
 
 ```sh
 docker pull ghcr.io/basht0p/m365-logstash-input-plugin:0.1.1-logstash-9.5.4

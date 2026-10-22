@@ -176,6 +176,7 @@ jobs:
           PIPELINE
           docker run --rm -v "$PWD/tmp/image.conf:/usr/share/logstash/pipeline/logstash.conf:ro" --entrypoint /usr/share/logstash/bin/logstash m365-logstash:ci \
             --config.test_and_exit -f /usr/share/logstash/pipeline/logstash.conf
+          docker image ls m365-logstash:ci
       - name: Log in to GHCR
         if: env.PUBLISH == 'true'
         uses: docker/login-action@v3
@@ -230,7 +231,7 @@ jobs:
             echo
             echo '### Container images'
             echo
-            echo 'Official Logstash images with the plugin installed:'
+            echo 'Official Logstash OSS images with the plugin installed:'
             echo
             for pack in dist/*-offline.zip; do
               ls_version="${pack##*-logstash-}"
