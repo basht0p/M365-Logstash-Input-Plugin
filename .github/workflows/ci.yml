@@ -195,7 +195,7 @@ jobs:
           measure() {
             local name="$1" image="$2"
             docker rm -f mem >/dev/null 2>&1 || true
-            docker run -d --name mem -p 9600:9600 -v "$PWD/tmp/mem.conf:/usr/share/logstash/pipeline/logstash.conf:ro" "$image" >/dev/null
+            docker run -d --name mem -p 9600:9600 -e LS_JAVA_OPTS=-Xlog:gc:file=/tmp/gc.log -v "$PWD/tmp/mem.conf:/usr/share/logstash/pipeline/logstash.conf:ro" "$image" >/dev/null
             local start peak=0 done_s="" idle_until="" mib out
             start=$(date +%s)
             while :; do
@@ -203,17 +203,17 @@ jobs:
               mib=$(docker stats --no-stream --format '{{.MemUsage}}' mem | to_mib)
               (( mib > peak )) && peak=$mib
               out=$(curl -sf localhost:9600/_node/stats/events | jq -r '.events.out' 2>/dev/null || echo 0)
-              if [[ -z "$done_s" && "$out" -ge "$count" ]]; then done_s=$(( $(date +%s) - start )); idle_until=$(( $(date +%s) + 180 )); fi
+              if [[ -z "$done_s" && "$out" -ge "$count" ]]; then done_s=$(( $(date +%s) - start )); idle_until=$(( $(date +%s) + 300 )); fi
               echo "$name t=$(( $(date +%s) - start ))s rss=${mib}MiB out=$out"
               if [[ -n "$idle_until" && $(date +%s) -ge $idle_until ]]; then break; fi
               if (( $(date +%s) - start > 900 )); then echo "$name timed out" >&2; break; fi
             done
-            echo "RESULT | $name | ${done_s:-timeout}s to process $count | peak ${peak}MiB | ${mib}MiB 3 min after load"
+            echo "RESULT | $name | ${done_s:-timeout}s to process $count | peak ${peak}MiB | ${mib}MiB 5 min after load"
+            docker exec mem grep -E 'Remark|Periodic|Full' /tmp/gc.log | tail -n 15 || true
+            docker exec mem tail -n 5 /tmp/gc.log || true
             docker rm -f mem >/dev/null
           }
           {
-            measure "logstash ${{ matrix.logstash }}" "docker.elastic.co/logstash/logstash:${{ matrix.logstash }}"
-            measure "logstash-oss ${{ matrix.logstash }}" "docker.elastic.co/logstash/logstash-oss:${{ matrix.logstash }}"
             measure "m365 image ${{ matrix.logstash }}" m365-logstash:ci
           } | tee tmp/mem.log
           grep '^RESULT' tmp/mem.log

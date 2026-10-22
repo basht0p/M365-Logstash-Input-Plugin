@@ -28,8 +28,9 @@ LABEL org.opencontainers.image.source="https://github.com/basht0p/M365-Logstash-
 # Two malloc arenas keep glibc from growing a native heap per JVM thread.
 ENV MALLOC_ARENA_MAX=2
 # Between polls the pipeline is mostly idle. Start with a small heap that grows to the stock 1 GB
-# maximum under load, and run a periodic G1 cycle when idle so unused heap goes back to the OS.
+# maximum under load, and run a periodic G1 cycle when idle so unused heap goes back to the OS. The free
+# ratios let G1 shrink the heap once less than 60% of it is in use instead of the default 30%.
 # Later lines in jvm.options win, and LS_JAVA_OPTS still overrides both.
 RUN --mount=type=bind,from=gem,source=/out,target=/tmp/plugin,rw \
     bin/logstash-plugin install /tmp/plugin/logstash-input-microsoft365-*.gem \
- && printf '%s\n' '' '## microsoft365 image: release idle memory' '-Xms256m' '-XX:G1PeriodicGCInterval=60000' >> config/jvm.options
+ && printf '%s\n' '' '## microsoft365 image: release idle memory' '-Xms256m' '-XX:G1PeriodicGCInterval=60000' '-XX:MinHeapFreeRatio=20' '-XX:MaxHeapFreeRatio=40' >> config/jvm.options
