@@ -176,47 +176,6 @@ jobs:
           PIPELINE
           docker run --rm -v "$PWD/tmp/image.conf:/usr/share/logstash/pipeline/logstash.conf:ro" --entrypoint /usr/share/logstash/bin/logstash m365-logstash:ci \
             --config.test_and_exit -f /usr/share/logstash/pipeline/logstash.conf
-          docker image ls m365-logstash:ci
-      - name: Measure memory (temporary)
-        shell: bash
-        run: |
-          set -euo pipefail
-          count=1000000
-          record='{"id":"7f0c9a52-2f9b-4c1e-9a77-0d5b8f2b6e11","createdDateTime":"2026-10-22T11:00:00Z","userDisplayName":"Example User","userPrincipalName":"user@example.com","userId":"0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0","appId":"00000003-0000-0000-c000-000000000000","appDisplayName":"Office 365 Exchange Online","ipAddress":"203.0.113.10","clientAppUsed":"Browser","conditionalAccessStatus":"success","isInteractive":true,"riskDetail":"none","riskLevelAggregated":"none","riskLevelDuringSignIn":"none","riskState":"none","status":{"errorCode":0,"failureReason":"Other.","additionalDetails":null},"deviceDetail":{"deviceId":"","displayName":"","operatingSystem":"Windows10","browser":"Edge 130.0.0","isCompliant":false,"isManaged":false,"trustType":""},"location":{"city":"Seattle","state":"Washington","countryOrRegion":"US","geoCoordinates":{"altitude":null,"latitude":47.6,"longitude":-122.3}},"appliedConditionalAccessPolicies":[{"id":"1","displayName":"Require MFA","enforcedGrantControls":["Mfa"],"enforcedSessionControls":[],"result":"success"},{"id":"2","displayName":"Block legacy auth","enforcedGrantControls":["Block"],"enforcedSessionControls":[],"result":"notApplied"}]}'
-          cat > tmp/mem.conf <<PIPELINE
-          input {
-            generator { count => $count message => '$record' }
-            heartbeat { interval => 10 }
-          }
-          filter { json { source => "message" } }
-          output { stdout { codec => dots } }
-          PIPELINE
-          to_mib() { awk '{v=$1; if (v ~ /GiB/) {sub(/GiB/,"",v); v*=1024} else if (v ~ /MiB/) {sub(/MiB/,"",v)} else if (v ~ /KiB/) {sub(/KiB/,"",v); v/=1024} else {sub(/B/,"",v); v/=1048576}; printf "%d", v}'; }
-          measure() {
-            local name="$1" image="$2"
-            docker rm -f mem >/dev/null 2>&1 || true
-            docker run -d --name mem -p 9600:9600 -e LS_JAVA_OPTS=-Xlog:gc:file=/tmp/gc.log -v "$PWD/tmp/mem.conf:/usr/share/logstash/pipeline/logstash.conf:ro" "$image" >/dev/null
-            local start peak=0 done_s="" idle_until="" mib out
-            start=$(date +%s)
-            while :; do
-              sleep 5
-              mib=$(docker stats --no-stream --format '{{.MemUsage}}' mem | to_mib)
-              (( mib > peak )) && peak=$mib
-              out=$(curl -sf localhost:9600/_node/stats/events | jq -r '.events.out' 2>/dev/null || echo 0)
-              if [[ -z "$done_s" && "$out" -ge "$count" ]]; then done_s=$(( $(date +%s) - start )); idle_until=$(( $(date +%s) + 300 )); fi
-              echo "$name t=$(( $(date +%s) - start ))s rss=${mib}MiB out=$out"
-              if [[ -n "$idle_until" && $(date +%s) -ge $idle_until ]]; then break; fi
-              if (( $(date +%s) - start > 900 )); then echo "$name timed out" >&2; break; fi
-            done
-            echo "RESULT | $name | ${done_s:-timeout}s to process $count | peak ${peak}MiB | ${mib}MiB 5 min after load"
-            docker exec mem grep -E 'Remark|Periodic|Full' /tmp/gc.log | tail -n 15 || true
-            docker exec mem tail -n 5 /tmp/gc.log || true
-            docker rm -f mem >/dev/null
-          }
-          {
-            measure "m365 image ${{ matrix.logstash }}" m365-logstash:ci
-          } | tee tmp/mem.log
-          grep '^RESULT' tmp/mem.log
       - name: Log in to GHCR
         if: env.PUBLISH == 'true'
         uses: docker/login-action@v3

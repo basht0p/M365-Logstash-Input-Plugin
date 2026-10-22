@@ -97,6 +97,8 @@ docker pull ghcr.io/basht0p/m365-logstash-input-plugin:1.0.0-logstash-9.5.4
 
 Tags are `<plugin version>-logstash-<logstash version>`. `<plugin version>` alone points to the newest supported Logstash, and `latest` is added for stable (1.0 and later) releases. The images are Elastic's `logstash-oss` images plus this plugin, so the usual Logstash image settings, environment variables, and mount points apply. The OSS distribution leaves out X-Pack and the Elastic-licensed plugins, so `xpack.*` settings (monitoring, central management) and the `elastic_integration` filter aren't available. If a pipeline needs them, install the [offline pack](#prepare-an-offline-installation-pack) on the default Logstash distribution instead.
 
+The plugin polls Microsoft APIs, so Logstash is idle most of the time. The image's `config/jvm.options` therefore starts with a 256 MB heap that grows to the stock 1 GB maximum under load, and G1 hands unused heap back to the OS when idle. In CI, a burst of 1 million events peaked at about 670 MiB and settled at about 540 MiB, against about 1,150 MiB for the stock Logstash images, with the same throughput. Set `LS_JAVA_OPTS` to change the heap, for example `-Xmx2g` for large tenants or `-Xms1g` for the stock fixed heap. Mounting your own `config/` directory replaces these settings.
+
 To build one yourself from a checkout, choose the Logstash version with a build argument:
 
 ```sh
