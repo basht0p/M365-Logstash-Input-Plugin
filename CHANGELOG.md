@@ -2,7 +2,7 @@
 
 ## [1.0.0]
 
-First stable release. It has been validated on live Microsoft 365 tenants.
+First stable release. It has been validated on live Commercial Microsoft 365 tenants; GCC, GCC High, and DoD haven't been tested yet.
 
 - The container image is built on `docker.elastic.co/logstash/logstash-oss` instead of the default Logstash image, which leaves out X-Pack and the Elastic-licensed plugins. Pipelines that use `xpack.*` settings or the `elastic_integration` filter should install the offline pack on the default distribution instead.
 - `Initialize-M365LogstashTenant.ps1` records each run in a single `provisioning_result.json` (IDs, permissions, consented roles, validation results, credential expiry, generated file paths, and credential import steps) and prints only that file's path instead of a nested table. It replaces `provisioning-report.json` and `credential-import.txt`.
