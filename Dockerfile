@@ -25,5 +25,11 @@ FROM docker.elastic.co/logstash/logstash-oss:${LOGSTASH_VERSION}
 LABEL org.opencontainers.image.source="https://github.com/basht0p/M365-Logstash-Input-Plugin" \
       org.opencontainers.image.description="Logstash OSS with the microsoft365 input plugin" \
       org.opencontainers.image.licenses="Apache-2.0"
+# Two malloc arenas keep glibc from growing a native heap per JVM thread.
+ENV MALLOC_ARENA_MAX=2
+# Between polls the pipeline is mostly idle. Start with a small heap that grows to the stock 1 GB
+# maximum under load, and run a periodic G1 cycle when idle so unused heap goes back to the OS.
+# Later lines in jvm.options win, and LS_JAVA_OPTS still overrides both.
 RUN --mount=type=bind,from=gem,source=/out,target=/tmp/plugin,rw \
-    bin/logstash-plugin install /tmp/plugin/logstash-input-microsoft365-*.gem
+    bin/logstash-plugin install /tmp/plugin/logstash-input-microsoft365-*.gem \
+ && printf '%s\n' '' '## microsoft365 image: release idle memory' '-Xms256m' '-XX:G1PeriodicGCInterval=60000' >> config/jvm.options
