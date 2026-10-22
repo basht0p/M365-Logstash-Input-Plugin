@@ -18,7 +18,7 @@ The implementation targets Logstash 8.19 and 9.x, Microsoft 365 Management Activ
 | Container/runtime availability | Official Logstash 8.19.22 and 9.5.4 images were used. The 9.5.4 image reports JRuby 10.0.6, Ruby 3.4.5, and JDK 21.0.12. |
 | Runtime harness | Passed on Logstash 8.19.22 and 9.5.4: Base/Event integration, H2 state locking/reopen, backpressure checkpoint delay, MSAL secret/PFX construction, mutable version IDs, clean shutdown, and rejection of an Activity `replay_from` older than seven days. HTTP was faked; no Microsoft tenant calls were made. |
 | Full-queue shutdown stress | Passed on both versions using actual Logstash Java memory and persistent queue writers. Stopping a blocked writer exits without advancing the source checkpoint or seen marker, including after H2 reopens. |
-| Commercial tenant smoke test | Not yet reported. |
+| Commercial tenant smoke test | Passed: the maintainer reported successful collection on live Commercial tenants before the 1.0.0 release. |
 | GCC tenant smoke test | Not yet reported. |
 | GCC High tenant smoke test | Not yet reported. |
 | DoD tenant smoke test | Not yet reported. |
@@ -26,12 +26,12 @@ The implementation targets Logstash 8.19 and 9.x, Microsoft 365 Management Activ
 | Long-running Logstash 8.19 compatibility | Runtime harness passed on 8.19.22. Live API collection remains unverified. |
 | Long-running Logstash 9.x compatibility | Runtime harness passed on 9.5.4. Live API collection remains unverified. |
 
-No Microsoft tenant credentials were used and no live cloud smoke tests have been run. The local runtime and helper tests used simulated HTTP/API calls.
+The automated checks above use simulated HTTP/API calls and no Microsoft tenant credentials. Live tenant results come from maintainer runs; only the Commercial cloud has been tested.
 
-CI builds and tests matching-version offline archives on both Logstash versions, and uploads the gem and archives as workflow artifacts. A `v*` tag publishes the same tested artifacts as a GitHub release; 0.x versions are marked as pre-releases. The runtime harness has a timeout so a shutdown regression fails the job.
+CI builds and tests matching-version offline archives on both Logstash versions, and uploads the gem and archives as workflow artifacts. A `v*` tag publishes the same tested artifacts as a GitHub release; 0.x and suffixed versions are marked as pre-releases. The runtime harness has a timeout so a shutdown regression fails the job.
 
 Endpoint constants or passing mocked tests do not establish live government-cloud service support. Do not describe an environment as verified until an authorized tenant smoke test has succeeded for the enabled sources.
 
 ## Production suitability
 
-Treat this as a development release until the evidence above is updated with actual run results. Before production deployment, validate the target tenant's application consent, licensing, audit configuration, source retention, persistent queue behavior, backup/restore process, and expected event fields. Record the exact plugin version and cloud tested.
+Before production deployment, validate the target tenant's application consent, licensing, audit configuration, source retention, persistent queue behavior, backup/restore process, and expected event fields. Record the exact plugin version and cloud tested.

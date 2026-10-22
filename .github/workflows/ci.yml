@@ -230,7 +230,7 @@ jobs:
             echo
             echo '### Container images'
             echo
-            echo 'Official Logstash images with the plugin installed:'
+            echo 'Official Logstash OSS images with the plugin installed:'
             echo
             for pack in dist/*-offline.zip; do
               ls_version="${pack##*-logstash-}"
