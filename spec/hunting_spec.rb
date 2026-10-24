@@ -70,8 +70,46 @@ RSpec.describe LogStash::Inputs::Microsoft365Support::HuntingCollector do
     edited = incremental_job.merge('interval' => 900, 'max_rows' => 500, 'initial_lookback' => 7200)
     http = run_job(edited, now + 1000, rows: rows)
     expect(state.checkpoints.keys.grep(/:window\z/)).to eq([window.first])
-    expect(http.calls.first[3]['query']).to include("datetime(#{Time.iso8601(window.last).iso8601(3)})")
+    expect(http.calls.first[3]['Query']).to include("datetime(#{Time.iso8601(window.last).iso8601(3)})")
     expect(queue.length).to eq(1)
+  end
+
+  it 'posts the documented Query property' do
+    http = run_job(incremental_job, now)
+    expect(http.calls.first[3].keys).to eq(['Query'])
+    expect(http.calls.first[3]['Query']).to start_with('DeviceEvents')
+  end
+
+  it 'splits a window when Graph rejects it for exceeding the result size' do
+    calls = 0
+    http = FakeHTTP.new do |_method, _resource, url, body|
+      calls += 1
+      if body['Query'].include?("datetime(#{(now - 120).iso8601(3)}) .. datetime(#{now.iso8601(3)})")
+        raise LogStash::Inputs::Microsoft365Support::HTTPError.new(400, url, 'BadRequest: Query execution has exceeded the allowed result size. Optimize your query by limiting the number of results and try again.')
+      end
+      response({ 'results' => [{ 'ReportId' => calls.to_s, 'Timestamp' => now.iso8601 }] })
+    end
+    with_job(incremental_job) do |path|
+      described_class.new(path: path, http: http, state: state, emitter: emitter(state, queue), config: config, stop: -> { false }, clock: -> { now }).run_once
+    end
+    expect(calls).to eq(3)
+    expect(queue.length).to eq(2)
+    expect(state.checkpoints.keys.grep(/:window\z/).length).to eq(1)
+  end
+
+  it 'still pauses on other 400 errors' do
+    http = FakeHTTP.new { |_method, _resource, url, _body| raise LogStash::Inputs::Microsoft365Support::HTTPError.new(400, url, 'BadRequest: syntax error') }
+    with_job(incremental_job) do |path|
+      collector = described_class.new(path: path, http: http, state: state, emitter: emitter(state, queue), config: config, stop: -> { false }, clock: -> { now })
+      expect { collector.run_once }.to raise_error(LogStash::Inputs::Microsoft365Support::HTTPError, /syntax error/)
+    end
+  end
+
+  it 'rejects a job lookback beyond the 30 days advanced hunting serves' do
+    with_job(incremental_job.merge('initial_lookback' => 31 * 86_400)) do |path|
+      expect { described_class.new(path: path, http: FakeHTTP.new { nil }, state: state, emitter: emitter(state, queue), config: config, stop: -> { false }) }
+        .to raise_error(/cannot exceed 30 days/)
+    end
   end
 
   it 'migrates checkpoints stored under the previous whole-job key' do
@@ -79,7 +117,7 @@ RSpec.describe LogStash::Inputs::Microsoft365Support::HuntingCollector do
     state.set_checkpoint("#{legacy}:window", (now - 60).iso8601(3))
     state.set_checkpoint("#{legacy}:last_run", (now - 600).iso8601(3))
     http = run_job(incremental_job, now)
-    expect(http.calls.first[3]['query']).to include("datetime(#{(now - 60).iso8601(3)})")
+    expect(http.calls.first[3]['Query']).to include("datetime(#{(now - 60).iso8601(3)})")
   end
 
   it 'does not split snapshot aggregation queries' do

@@ -148,6 +148,63 @@ RSpec.describe 'Microsoft 365 collectors' do
     end
   end
 
+  it 'sends Activity time bounds in the documented YYYY-MM-DDTHH:MM:SS UTC format' do
+    urls = []
+    http = activity_http(['Audit.Exchange'], content: lambda { |_type, url|
+      urls << url
+      []
+    })
+    offset_clock = now.getlocal('+05:30')
+    collector = LogStash::Inputs::Microsoft365Support::ActivityCollector.new(http: http, state: state, emitter: output, config: config, stop: -> { false }, clock: -> { offset_clock })
+    collector.run_once
+    params = URI.decode_www_form(URI.parse(urls.first).query).to_h
+    expect(params['startTime']).to eq('2026-09-24T11:00:00')
+    expect(params['endTime']).to eq('2026-09-24T12:00:00')
+    expect(urls.first).not_to match(/Z|%3A|\.\d{3}/)
+  end
+
+  it 'collects from a listed subscription that has no status field' do
+    blob = { 'contentId' => 'b1', 'contentUri' => 'https://manage.office.com/b1' }
+    http = FakeHTTP.new do |_method, _resource, url, _body|
+      case url
+      when %r{/list} then response([{ 'contentType' => 'Audit.Exchange', 'webhook' => nil }])
+      when /\/content\?/ then response([blob])
+      when blob['contentUri'] then response([{ 'Id' => 'e1', 'CreationTime' => '2026-09-24T11:30:00' }])
+      else raise url
+      end
+    end
+    collector = LogStash::Inputs::Microsoft365Support::ActivityCollector.new(http: http, state: state, emitter: output, config: config, stop: -> { false }, clock: -> { now })
+    collector.run_once
+    expect(queue.length).to eq(1)
+    expect(http.calls.map(&:first)).not_to include(:post)
+  end
+
+  it 'adds PublisherIdentifier to blob downloads when configured' do
+    blob = { 'contentId' => 'b1', 'contentUri' => 'https://manage.office.com/api/v1.0/tenant/activity/feed/audit/b1' }
+    http = activity_http(['Audit.Exchange'], content: ->(_type, _url) { [blob] },
+                                             blobs: { "#{blob['contentUri']}?PublisherIdentifier=pub-1" => [{ 'Id' => 'e1', 'CreationTime' => '2026-09-24T11:30:00' }] })
+    collector = LogStash::Inputs::Microsoft365Support::ActivityCollector.new(http: http, state: state, emitter: output, config: config.merge(publisher_identifier: 'pub-1'), stop: -> { false }, clock: -> { now })
+    collector.run_once
+    expect(queue.length).to eq(1)
+    expect(http.calls.map { |call| call[2] }.select { |url| url.include?('/content?') || url.include?('/audit/') }).to all(include('PublisherIdentifier=pub-1'))
+  end
+
+  it 'reports source gaps even when another content type fails in the same run' do
+    expired = { 'contentId' => 'old', 'contentUri' => 'https://manage.office.com/old', 'contentExpiration' => (now - 60).iso8601 }
+    state.add_pending('activity:Audit.SharePoint', 'old', expired)
+    http = activity_http(%w[Audit.Exchange Audit.SharePoint], content: lambda { |type, url|
+      raise LogStash::Inputs::Microsoft365Support::HTTPError.new(403, url, 'denied') if type == 'Audit.Exchange'
+
+      []
+    })
+    gaps = []
+    collector = LogStash::Inputs::Microsoft365Support::ActivityCollector.new(http: http, state: state, emitter: output,
+                                                                             config: config.merge(activity_content_types: %w[Audit.Exchange Audit.SharePoint]),
+                                                                             stop: -> { false }, clock: -> { now }, on_gap: ->(message) { gaps << message })
+    expect { collector.run_once }.to raise_error(LogStash::Inputs::Microsoft365Support::PartialFailure)
+    expect(gaps.join).to include('blob old expired')
+  end
+
   it 'skips an expired Activity blob once, reports the gap, and keeps collecting' do
     expired = { 'contentId' => 'old', 'contentUri' => 'https://manage.office.com/old', 'contentExpiration' => (now - 60).iso8601 }
     state.add_pending('activity:Audit.Exchange', 'old', expired)
@@ -164,7 +221,7 @@ RSpec.describe 'Microsoft 365 collectors' do
     state.set_checkpoint('activity:Audit.Exchange:window', (now - 10 * 86_400).iso8601(3))
     starts = []
     http = activity_http(['Audit.Exchange'], content: lambda { |_type, url|
-      starts << Time.iso8601(URI.decode_www_form(URI.parse(url).query).to_h.fetch('startTime'))
+      starts << Time.iso8601("#{URI.decode_www_form(URI.parse(url).query).to_h.fetch('startTime')}Z")
       []
     })
     collector = LogStash::Inputs::Microsoft365Support::ActivityCollector.new(http: http, state: state, emitter: output, config: config, stop: -> { false }, clock: -> { now })

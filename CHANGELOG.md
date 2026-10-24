@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+- Activity content listings send `startTime`/`endTime` as `YYYY-MM-DDTHH:MM:SS` in UTC, the format the Management Activity API documents, instead of ISO 8601 with a trailing `Z`.
+- An Activity subscription listed without a `status` field is collected; only an explicit `disabled` status blocks a content type. Microsoft's own sample listing includes such entries, which previously failed every run as "disabled".
+- Blob downloads carry `PublisherIdentifier` when it is configured, so they share the dedicated quota with the other Activity requests.
+- Source gaps found in a run where another content type failed are now logged and counted instead of being dropped.
+- Hunting queries are sent with the documented `Query` body property (the tenant helper's validation probe too), and a Graph 400 for exceeding the 50 MB result size splits the window like a row cap instead of pausing the collector for an hour.
+- `initial_lookback` above 30 days is rejected at configuration time when the hunting collector is enabled, at the input and the job level, because advanced hunting serves 30 days and older windows would silently return nothing.
+- `docs/hunting.md` notes that result column names are matched case-sensitively.
+
 ## [1.0.0]
 
 First stable release. It has been validated on live Commercial Microsoft 365 tenants; GCC, GCC High, and DoD haven't been tested yet.

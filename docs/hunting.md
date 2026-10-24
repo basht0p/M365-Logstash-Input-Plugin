@@ -21,7 +21,11 @@ The file may be a JSON array of jobs or an object with a `jobs` array. Each job 
 }
 ```
 
-Incremental jobs must include both `{{start}}` and `{{end}}` placeholders and filter the event timestamp to the half-open interval. The plugin replaces each placeholder with a complete KQL `datetime(...)` literal; do not wrap placeholders in another `datetime()` call. Include stable identity columns in `identity_fields` so overlapping retrievals can be deduplicated. Windows are at most one hour; when the response reaches `max_rows` or is too large, the collector splits the window and retries each half. If a result cap persists below the minimum split size, the job fails visibly and its checkpoint does not advance.
+Incremental jobs must include both `{{start}}` and `{{end}}` placeholders and filter the event timestamp to the half-open interval. The plugin replaces each placeholder with a complete KQL `datetime(...)` literal; do not wrap placeholders in another `datetime()` call. Include stable identity columns in `identity_fields` so overlapping retrievals can be deduplicated. Windows are at most one hour; when the response reaches `max_rows`, exceeds the plugin's response limit, or Graph rejects it for exceeding its 50 MB result-size cap, the collector splits the window and retries each half. If a result cap persists below the minimum split size, the job fails visibly and its checkpoint does not advance.
+
+`timestamp_field` and `identity_fields` are matched against result column names exactly, including case. Use the names your query's `project` produces (`Timestamp`, `ReportId`, and so on); a mismatch fails the job with `missing identity field` or `returned row without timestamp` rather than emitting partial rows.
+
+Advanced hunting serves the last 30 days of data. `initial_lookback`, at the input or job level, cannot exceed 30 days when the hunting collector is enabled; earlier windows would return nothing without an error.
 
 A job's progress is stored under its `name` plus a hash of `query`, `mode`, `timestamp_field`, and `identity_fields`. Changing `interval`, `max_rows`, or `initial_lookback` keeps the job's progress and document IDs. Changing one of the hashed fields starts the job over from its lookback with new document IDs, because it returns different rows. To start a job over deliberately, rename it.
 

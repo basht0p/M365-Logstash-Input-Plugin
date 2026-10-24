@@ -114,7 +114,7 @@ class LogStash::Inputs::Microsoft365 < LogStash::Inputs::Base
       on_enqueue_end: -> { track_enqueue_end },
       event_factory: ->(data) { LogStash::Event.new(data) }
     )
-    collectors = build_collectors(emitter)
+    collectors = build_collectors(emitter, metric_for)
     tasks = SizedQueue.new([@max_workers.to_i * 2, 1].max)
     active = {}
     due = collectors.keys.to_h { |name| [name, Time.at(0)] }
@@ -291,6 +291,9 @@ class LogStash::Inputs::Microsoft365 < LogStash::Inputs::Base
     raise LogStash::ConfigurationError, 'signin_types must contain valid distinct types' if @signin_types.empty? || @signin_types.uniq.length != @signin_types.length || (@signin_types - allowed_types).any?
     raise LogStash::ConfigurationError, 'signin_beta has no distinct sign-in types to collect' if @collectors.include?('signin_beta') && effective_signin_types.empty?
     raise LogStash::ConfigurationError, 'hunting requires hunting_queries_path' if @collectors.include?('hunting') && (!@hunting_queries_path || !::File.file?(@hunting_queries_path))
+    if @collectors.include?('hunting') && @initial_lookback.to_i > LogStash::Inputs::Microsoft365Support::HuntingCollector::MAX_LOOKBACK
+      raise LogStash::ConfigurationError, 'initial_lookback cannot exceed 30 days when hunting is enabled; advanced hunting serves 30 days of data'
+    end
     raise LogStash::ConfigurationError, 'include_sensitive_dlp requires include_dlp' if @include_sensitive_dlp && !@include_dlp
     raise LogStash::ConfigurationError, 'state_path must not be empty' if @state_path.to_s.empty?
     allowed_feeds = %w[Audit.Exchange Audit.SharePoint Audit.General Audit.AzureActiveDirectory DLP.All]
@@ -334,11 +337,15 @@ class LogStash::Inputs::Microsoft365 < LogStash::Inputs::Base
     types
   end
 
-  def build_collectors(emitter)
+  def build_collectors(emitter, metric_for)
+    on_gap = lambda do |message|
+      metric_for.call('activity')&.increment(:gaps)
+      @logger.warn('Microsoft 365 source gap', collector: 'activity', error: message)
+    end
     @collectors.to_h do |name|
       shared = { http: @http, state: @state, emitter: emitter, config: @config_hash, stop: -> { @stopped } }
       collector = case name
-                  when 'activity' then LogStash::Inputs::Microsoft365Support::ActivityCollector.new(**shared)
+                  when 'activity' then LogStash::Inputs::Microsoft365Support::ActivityCollector.new(on_gap: on_gap, **shared)
                   when 'hunting' then LogStash::Inputs::Microsoft365Support::HuntingCollector.new(path: @hunting_queries_path, **shared)
                   else LogStash::Inputs::Microsoft365Support::GraphCollector.new(name: name, **shared)
                   end

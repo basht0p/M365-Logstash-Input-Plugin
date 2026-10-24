@@ -4,6 +4,7 @@ require 'json'
 require 'time'
 require 'digest'
 require_relative 'errors'
+require_relative 'http'
 
 module LogStash
   module Inputs
@@ -11,6 +12,9 @@ module LogStash
       class HuntingCollector
         MAX_WINDOW = 3600
         MIN_SPLIT_SECONDS = 60
+        # Advanced hunting serves the last 30 days; earlier windows return nothing without an error.
+        MAX_LOOKBACK = 30 * 86_400
+        RESULT_SIZE_ERROR = /exceeded the allowed result size/i.freeze
         # Fields that change which rows a job returns or how they are identified. Scheduling and limit fields
         # (interval, max_rows, initial_lookback) are excluded so editing them keeps the job's progress.
         IDENTITY_FIELDS = %w[query mode timestamp_field identity_fields].freeze
@@ -59,6 +63,7 @@ module LogStash
           mode = job['mode']
           raise "Hunting mode invalid for #{name}" unless %w[incremental snapshot].include?(mode)
           raise "Hunting interval invalid for #{name}" if job.key?('interval') && job['interval'].to_i < 60
+          raise "Hunting initial_lookback for #{name} cannot exceed 30 days" if job.key?('initial_lookback') && job['initial_lookback'].to_i > MAX_LOOKBACK
           max_rows = job.fetch('max_rows', 100_000).to_i
           raise "Hunting max_rows invalid for #{name}" unless max_rows.between?(2, 100_000)
           if mode == 'incremental'
@@ -121,6 +126,12 @@ module LogStash
           rescue ResponseTooLarge
             split_window(job, start_at, finish_at)
             return
+          rescue HTTPError => e
+            # Graph enforces its own result-size cap with a 400; a smaller window fixes it, so split rather than pause.
+            raise unless e.status == 400 && e.message.match?(RESULT_SIZE_ERROR)
+
+            split_window(job, start_at, finish_at)
+            return
           end
           limit = job.fetch('max_rows', 100_000).to_i
           if rows.length >= limit
@@ -144,7 +155,8 @@ module LogStash
 
         def query(text)
           raise Stopped, 'Microsoft 365 collection stopped' if @stop.call
-          response = @http.post('graph', '/v1.0/security/runHuntingQuery', { 'query' => text })
+          # The documented body property is `Query`; Graph's case-insensitivity for action parameters is not guaranteed.
+          response = @http.post('graph', '/v1.0/security/runHuntingQuery', { 'Query' => text })
           data = response.body
           raise 'Invalid Graph hunting response' unless data.is_a?(Hash) && data['results'].is_a?(Array)
           data['results']
