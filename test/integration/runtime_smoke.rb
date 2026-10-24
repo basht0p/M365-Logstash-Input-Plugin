@@ -271,5 +271,21 @@ Dir.mktmpdir('m365-logstash-runtime-') do |root|
     stale_replay.close
   end
 
+  # Advanced hunting serves 30 days; an older lookback would advance past data that was never available.
+  hunting_jobs = File.join(root, 'jobs.json')
+  File.write(hunting_jobs, '{"jobs":[{"name":"j","mode":"snapshot","query":"DeviceInfo | take 1"}]}')
+  long_lookback = LogStash::Inputs::Microsoft365.new(config.merge(
+    'state_path' => File.join(root, 'hunting-state'), 'collectors' => ['hunting'],
+    'hunting_queries_path' => hunting_jobs, 'initial_lookback' => 31 * 86_400
+  ))
+  begin
+    long_lookback.register
+    raise 'hunting lookback beyond 30 days unexpectedly registered'
+  rescue LogStash::ConfigurationError => e
+    assert(e.message.include?('30 days'), "hunting lookback rejection: #{e.message}")
+  ensure
+    long_lookback.close
+  end
+
   puts 'PASS real Logstash runtime: Base/Event, MSAL4J secret+PFX, H2 lock/reopen, memory and persistent queue shutdown, mutable updates, fields, metadata, config validation'
 end

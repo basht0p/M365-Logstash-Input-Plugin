@@ -105,9 +105,10 @@ module LogStash
         FAILURE_BACKOFF = 3600
         FORCE_FIELD = '_m365_force'
 
-        def initialize(http:, state:, emitter:, config:, stop:, clock: -> { Time.now.utc }, max_pages: MAX_PAGES)
+        # on_gap: called with a description when source gaps were found in a run that also had a failing content type.
+        def initialize(http:, state:, emitter:, config:, stop:, clock: -> { Time.now.utc }, max_pages: MAX_PAGES, on_gap: nil)
           @http, @state, @emitter, @config, @stop, @clock = http, state, emitter, config, stop, clock
-          @max_pages = max_pages
+          @max_pages, @on_gap = max_pages, on_gap
           @tenant_id = config.fetch(:tenant_id)
           @windows = TimeWindows.new(state: state, config: config, clock: clock, max_window: MAX_WINDOW, max_age: MAX_AGE)
           @retry_at = {}
@@ -131,6 +132,8 @@ module LogStash
               failures[type] = e
             end
           end
+          # Gaps are reported even when another content type failed, so they are logged and counted either way.
+          @on_gap&.call("Activity source gaps: #{@gaps.join('; ')}") unless @gaps.empty? || failures.empty?
           raise PartialFailure.new('activity', failures) unless failures.empty?
           raise SourceGap, "Activity source gaps: #{@gaps.join('; ')}" unless @gaps.empty?
         end
@@ -159,14 +162,22 @@ module LogStash
           value && !value.empty? ? "&PublisherIdentifier=#{URI.encode_www_form_component(value)}" : ''
         end
 
+        # Microsoft asks for PublisherIdentifier on every request, including blob downloads, for a dedicated quota.
+        def blob_uri(uri)
+          return uri if publisher_query.empty? || uri.include?('PublisherIdentifier=')
+
+          "#{uri}#{uri.include?('?') ? publisher_query : publisher_query.sub(/\A&/, '?')}"
+        end
+
         def ensure_subscription(type)
           response = @http.get('activity', "#{base_path}/list?#{publisher_query.sub(/^&/, '')}")
           subscriptions = response.body
           raise 'Invalid Activity subscription response' unless subscriptions.is_a?(Array)
 
           existing = subscriptions.find { |item| item['contentType'] == type }
-          return true if existing && existing['status'].to_s.casecmp('enabled').zero?
-          raise "Activity subscription #{type} exists but is disabled; inspect tenant webhook settings" if existing
+          # Microsoft's own sample listing includes subscriptions with no status; only an explicit 'disabled' blocks.
+          raise "Activity subscription #{type} exists but is disabled; inspect tenant webhook settings" if existing && existing['status'].to_s.casecmp('disabled').zero?
+          return true if existing
 
           last_start = @state.checkpoint("activity:#{type}:subscription_start")
           return false if last_start && @clock.call.utc - Time.iso8601(last_start) < 900
@@ -176,8 +187,17 @@ module LogStash
           false
         end
 
+        # The API documents YYYY-MM-DDTHH:MM:SS in UTC with no zone designator.
+        def activity_time(time)
+          time.getutc.strftime('%Y-%m-%dT%H:%M:%S')
+        end
+
         def fetch_content_window(type, start_at, finish_at, force: false)
-          url = "#{base_path}/content?contentType=#{URI.encode_www_form_component(type)}&startTime=#{URI.encode_www_form_component(start_at.iso8601)}&endTime=#{URI.encode_www_form_component(finish_at.iso8601)}#{publisher_query}"
+          start_text, finish_text = activity_time(start_at), activity_time(finish_at)
+          # startTime is inclusive and endTime exclusive, so whole-second bounds stay contiguous; equal bounds are rejected.
+          return if start_text == finish_text
+
+          url = "#{base_path}/content?contentType=#{URI.encode_www_form_component(type)}&startTime=#{start_text}&endTime=#{finish_text}#{publisher_query}"
           visited = {}
           pages = 0
           while url
@@ -215,7 +235,7 @@ module LogStash
               @state.remove_pending_hash("activity:#{type}", id_hash)
               next
             end
-            records = @http.get('activity', blob.fetch('contentUri')).body
+            records = @http.get('activity', blob_uri(blob.fetch('contentUri'))).body
             raise "Invalid Activity blob #{content_id}" unless records.is_a?(Array)
 
             records.each do |record|

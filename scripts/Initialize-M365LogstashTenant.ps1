@@ -486,7 +486,7 @@ function Test-SetupAccess($AppId, $Manifest, $Selection, [SecureString]$Secret, 
         $version = $entry.api_version
         $uri = "$($cloudSpec.graph_base_url)/$version$($entry.endpoint)"
         if ($name -eq 'hunting') {
-            $reply = Invoke-SetupProbe POST $uri $tokens['graph'] @{ query = $HuntingValidationQuery }
+            $reply = Invoke-SetupProbe POST $uri $tokens['graph'] @{ Query = $HuntingValidationQuery }
         } else {
             $reply = Invoke-SetupProbe GET "$uri`?`$top=1" $tokens['graph'] $null
         }

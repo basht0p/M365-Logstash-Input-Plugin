@@ -289,6 +289,17 @@ Describe 'Recovery and app-only validation' {
         Should -Invoke Get-SetupAppToken -Times 1 -ParameterFilter { $Audience -eq 'https://graph.microsoft.com' }
     }
 
+    It 'probes advanced hunting with the documented Query body property' {
+        $chosen = @{ collectors=@('hunting'); permissions=@{ graph=[Collections.Generic.HashSet[string]]::new(); activity=[Collections.Generic.HashSet[string]]::new() }; activity_content_types=@() }
+        [void]$chosen.permissions.graph.Add('ThreatHunting.Read.All')
+        Mock Get-SetupRoleToken { return $script:graphToken }
+        $script:huntingBody = $null
+        Mock Invoke-SetupProbe { param($Method,$Uri,$Token,$Body); $script:huntingBody = $Body; return @{ results=@() } }
+        $result = Test-SetupAccess '22222222-2222-2222-2222-222222222222' $script:shared $chosen $null $null $null
+        $result.hunting | Should -Be 'authorized; no records returned'
+        @($script:huntingBody.Keys) | Should -Be @('Query')
+    }
+
     It 'waits for newly consented roles to reach the app-only token' {
         $script:tokenCalls = 0
         Mock Get-SetupAppToken { $script:tokenCalls++; if ($script:tokenCalls -lt 3) { return $script:emptyToken } else { return $script:activityToken } }
