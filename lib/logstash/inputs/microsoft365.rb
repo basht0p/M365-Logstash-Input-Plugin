@@ -20,6 +20,9 @@ class LogStash::Inputs::Microsoft365 < LogStash::Inputs::Base
   # reconciliation pass. Pruning is by age only and runs at most once per PRUNE_INTERVAL.
   PRUNE_INTERVAL = 3600
   MIN_DEDUPE_RETENTION = 10 * 86_400
+  # The H2 file is compacted after pruning once it has grown this much since the last compaction (or on the
+  # first pass after startup), because an open H2 database never shrinks or reuses most of its freed space.
+  COMPACT_GROWTH = 256 * 1024 * 1024
 
   config :tenant_id, validate: :string, required: true
   config :client_id, validate: :string, required: true
@@ -242,9 +245,21 @@ class LogStash::Inputs::Microsoft365 < LogStash::Inputs::Base
     end
     return unless due
 
-    @state.prune_seen(before: now - dedupe_retention)
-  rescue StandardError => e
-    @logger.error('Microsoft 365 state pruning failed', error_class: e.class.name)
+    pruned = @state.prune_seen(before: now - dedupe_retention)
+    compact_state_if_grown(pruned)
+  rescue StandardError, java.sql.SQLException => e
+    @logger.error('Microsoft 365 state maintenance failed', error_class: e.class.name)
+  end
+
+  def compact_state_if_grown(pruned)
+    size = @state.file_size
+    return if @compacted_size && size - @compacted_size < COMPACT_GROWTH
+
+    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    before, after = @state.compact
+    @compacted_size = after
+    @logger.info('Microsoft 365 state compacted', pruned: pruned, bytes_before: before, bytes_after: after,
+                                                  seconds: (Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).round(1))
   end
 
   def track_enqueue_start

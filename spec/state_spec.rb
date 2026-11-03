@@ -53,6 +53,27 @@ RSpec.describe LogStash::Inputs::Microsoft365Support::State do
     end
   end
 
+  it 'compacts the database file in place and keeps working on the reopened connection' do
+    Dir.mktmpdir do |path|
+      state = described_class.new(path: path, tenant_id: 'tenant-a', cloud: 'commercial')
+      2000.times { |index| state.mark_seen('signin', "id#{index}", 'immutable') }
+      state.set_checkpoint('signin', 'cursor')
+      expect(state.prune_seen(before: Time.now + 60)).to eq(2000)
+      state.mark_seen('signin', 'kept', 'immutable')
+      grown = state.file_size
+      before, after = state.compact
+      expect(before).to eq(grown)
+      expect(after).to be < grown / 4
+      expect(state.seen?('signin', 'kept', 'immutable')).to be_truthy
+      expect(state.checkpoint('signin')).to eq('cursor')
+      state.mark_seen('signin', 'after', 'immutable')
+      state.close
+      reopened = described_class.new(path: path, tenant_id: 'tenant-a', cloud: 'commercial')
+      expect(reopened.seen?('signin', 'after', 'immutable')).to be_truthy
+      reopened.close
+    end
+  end
+
   it 'writes several checkpoints atomically and deletes nil values' do
     Dir.mktmpdir do |path|
       state = described_class.new(path: path, tenant_id: 'tenant-a', cloud: 'commercial')

@@ -84,6 +84,15 @@ RSpec.describe 'High-volume collection', :volume do
         expect(state.prune_seen(before: now.first - 10 * 86_400)).to eq(0)
         oldest_id = ((now.first - 60 - 3600).to_r * RATE).ceil
         expect(state.seen?('signin', "s#{oldest_id}", 'immutable')).to be_truthy
+
+        # Compaction reclaims the space left by per-record commits without losing dedupe entries.
+        before, after = state.compact
+        expect(after).to be < before / 4
+        expect(state.seen?('signin', "s#{oldest_id}", 'immutable')).to be_truthy
+        now[0] += 60
+        collector.run_once
+        expect(queue.length).to eq(expected + 120 * RATE)
+        puts format("\n  state file: %<b>d MB before compaction, %<a>d MB after", b: before >> 20, a: after >> 20)
         puts format("\n  volume: %<n>d records in %<s>.1fs first pass, %<r>d HTTP requests", n: queue.length, s: first_pass, r: http.requests)
       ensure
         state.close
