@@ -26,7 +26,9 @@ module LogStash
           raise "Microsoft 365 state already owned: #{path}" unless @lock_file.flock(::File::LOCK_EX | ::File::LOCK_NB)
 
           db_path = ::File.join(path, 'microsoft365').tr('\\', '/')
-          @connection = Java::OrgH2::Driver.new.connect("jdbc:h2:file:#{db_path};AUTO_SERVER=FALSE;DB_CLOSE_ON_EXIT=FALSE;WRITE_DELAY=0", java.util.Properties.new)
+          @url = "jdbc:h2:file:#{db_path};AUTO_SERVER=FALSE;DB_CLOSE_ON_EXIT=FALSE;WRITE_DELAY=0"
+          @db_file = "#{db_path}.mv.db"
+          @connection = connect
           execute('CREATE TABLE IF NOT EXISTS metadata (name VARCHAR(64) PRIMARY KEY, payload VARCHAR(512) NOT NULL)')
           owner = query_one('SELECT payload FROM metadata WHERE name=?', 'owner')&.first
           raise "Microsoft 365 state belongs to #{owner}" if owner && owner != @namespace
@@ -110,6 +112,27 @@ module LogStash
           end
         end
 
+        # H2 never returns freed space to the file system while the database is open: with a commit per write
+        # (WRITE_DELAY=0) every dedupe insert leaves tens of kilobytes of superseded pages behind, so a busy
+        # tenant's file grows without bound even though pruning keeps the live rows bounded. SHUTDOWN COMPACT
+        # rewrites only the live data, then the connection is reopened. Collectors wait on the lock meanwhile;
+        # the time depends on the live data, not on the file size. Returns [bytes before, bytes after].
+        def compact
+          @mutex.synchronize do
+            before = file_size
+            begin
+              execute('SHUTDOWN COMPACT')
+            ensure
+              @connection = connect if @connection.closed?
+            end
+            [before, file_size]
+          end
+        end
+
+        def file_size
+          ::File.size?(@db_file).to_i
+        end
+
         def add_pending(name, identity, value)
           @mutex.synchronize do
             unless query_one('SELECT identity_hash FROM pending WHERE namespace=? AND name=? AND identity_hash=?', @namespace, name, hash(identity))
@@ -143,6 +166,10 @@ module LogStash
         end
 
         private
+
+        def connect
+          Java::OrgH2::Driver.new.connect(@url, java.util.Properties.new)
+        end
 
         def hash(value)
           Digest::SHA256.hexdigest(value.to_s)
