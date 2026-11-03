@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.0.1]
 
 - The H2 state file no longer grows without bound on busy tenants. Pruning removed expired dedupe entries, but H2 never released the freed space while the database was open, and each per-record commit left tens of kilobytes of superseded pages behind; in a test, about 15,000 live entries took up 3 GB. The input now compacts the file with `SHUTDOWN COMPACT` after the first pruning pass following startup, and again whenever the file has grown by 256 MB since the last compaction, then reopens it. Existing oversized state files shrink shortly after the first collector run following the upgrade.
 
