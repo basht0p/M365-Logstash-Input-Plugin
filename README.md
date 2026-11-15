@@ -8,7 +8,7 @@
 
 [![CI](https://github.com/basht0p/M365-Logstash-Input-Plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/basht0p/M365-Logstash-Input-Plugin/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0.1-informational.svg)](logstash-input-microsoft365.gemspec)
+[![Version](https://img.shields.io/badge/version-1.0.2-informational.svg)](logstash-input-microsoft365.gemspec)
 [![Status](https://img.shields.io/badge/status-pre--release-orange.svg)](docs/validation-status.md)
 
 [![Logstash 8.19](https://img.shields.io/badge/Logstash-8.19-005571?logo=logstash&logoColor=white)](https://www.elastic.co/logstash)
@@ -41,7 +41,7 @@ Getting Microsoft 365 telemetry into a SIEM usually means stitching together scr
 - 📦 **Air-gap friendly.** The gem vendors pinned Java dependencies, and CI builds offline install packs and tests them in containers with networking disabled.
 
 > [!IMPORTANT]
-> **Pre-release.** Automated tests, packaging, and runtime checks pass on Logstash 8.19.22 and 9.5.4, but no live-tenant smoke tests have been reported yet. Read the [validation status](docs/validation-status.md) before deploying to production.
+> **Pre-release.** Automated tests, packaging, and runtime checks pass on Logstash 8.19.24 and 9.5.6, but no live-tenant smoke tests have been reported yet. Read the [validation status](docs/validation-status.md) before deploying to production.
 
 ## How it works
 
@@ -87,13 +87,13 @@ Run with `-WhatIf` first to preview, then run the `Provision` and consent phases
 ```sh
 mvn -B dependency:copy-dependencies
 gem build logstash-input-microsoft365.gemspec
-bin/logstash-plugin install --no-verify logstash-input-microsoft365-1.0.1.gem
+bin/logstash-plugin install --no-verify logstash-input-microsoft365-1.0.2.gem
 ```
 
 Or use a prebuilt container image, which is the official Logstash OSS image with the plugin installed:
 
 ```sh
-docker pull ghcr.io/basht0p/m365-logstash-input-plugin:1.0.1-logstash-9.5.4
+docker pull ghcr.io/basht0p/m365-logstash-input-plugin:1.0.2-logstash-9.5.6
 ```
 
 See [container image](docs/get-started.md#container-image) for tags, volumes, and building your own with the included `Dockerfile`.
@@ -228,7 +228,7 @@ pwsh -c "Invoke-Pester scripts/tests"             # tenant helper tests
 
 Run the specs with the JRuby bundled in Logstash. The CI workflow shows the exact `GEM_PATH` setup.
 
-CI runs the full matrix against official Logstash 8.19.22 and 9.5.4 images. The jobs cover specs, the runtime harness, gem install, `config.test_and_exit`, and offline-pack install with networking disabled. See [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+CI runs the full matrix against official Logstash 8.19.24 and 9.5.6 images. The jobs cover specs, the runtime harness, gem install, `config.test_and_exit`, and offline-pack install with networking disabled. See [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 ## License
 

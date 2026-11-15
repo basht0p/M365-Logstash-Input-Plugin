@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.2]
+
+Security release. Pull the new images, or install the new offline pack on Logstash 9.5.6 / 8.19.24.
+
+- The container images are built on Logstash 9.5.6 and 8.19.24, which remove the compromised eMudhra root certificates from the image's OS certificate bundle and the bundled JDK trust store (ESA-2026-237 / CVE-2026-115714, ESA-2026-228). The plugin's token and API requests trust those stores, so the 1.0.1 images (Logstash 9.5.4 / 8.19.22) should be replaced. The image tags are now `1.0.2-logstash-9.5.6` and `1.0.2-logstash-8.19.24`. If you install the plugin on your own Logstash, upgrade Logstash itself to 9.5.6 / 8.19.24.
+- The vendored jackson-core, jackson-databind, and jackson-annotations are pinned to 2.18.11 instead of the 2.18.1 that msal4j 1.22.0 resolves, which fixes CVE-2026-89425, CVE-2026-89407, CVE-2026-68494, CVE-2026-18401, CVE-2026-68497, CVE-2026-83557, CVE-2026-19032, and CVE-2026-59889. The plugin doesn't use the affected parser features.
+- CI and the offline packs target Logstash 8.19.24 and 9.5.6.
+
 ## [1.0.1]
 
 - The H2 state file no longer grows without bound on busy tenants. Pruning removed expired dedupe entries, but H2 never released the freed space while the database was open, and each per-record commit left tens of kilobytes of superseded pages behind; in a test, about 15,000 live entries took up 3 GB. The input now compacts the file with `SHUTDOWN COMPACT` after the first pruning pass following startup, and again whenever the file has grown by 256 MB since the last compaction, then reopens it. Existing oversized state files shrink shortly after the first collector run following the upgrade.
