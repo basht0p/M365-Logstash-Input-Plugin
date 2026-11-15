@@ -41,7 +41,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        logstash: ['8.19.22', '9.5.4']
+        logstash: ['8.19.24', '9.5.6']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -111,8 +111,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - logstash: '8.19.22'
-          - logstash: '9.5.4'
+          - logstash: '8.19.24'
+          - logstash: '9.5.6'
             default: true
     steps:
       - uses: actions/checkout@v4

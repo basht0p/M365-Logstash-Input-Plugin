@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # Logstash OSS image with the microsoft365 input installed from this checkout.
-#   docker build --build-arg LOGSTASH_VERSION=9.5.4 -t logstash-microsoft365 .
-ARG LOGSTASH_VERSION=9.5.4
+#   docker build --build-arg LOGSTASH_VERSION=9.5.6 -t logstash-microsoft365 .
+ARG LOGSTASH_VERSION=9.5.6
 
 FROM --platform=$BUILDPLATFORM maven:3.9-eclipse-temurin-21 AS jars
 WORKDIR /src
